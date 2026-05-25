@@ -188,7 +188,7 @@ export default function PrivacyActionsTracker({
                 <div className="space-y-1">
                   <span className="font-semibold text-zinc-300 block">1. Identity Verification</span>
                   <p className="text-[#B0B7C3] leading-relaxed">
-                    Most providers will reject removal requests if identity ownership isn't fully validated. Complete Government ID liveness verifies you are the authorized subject.
+                    Most providers will reject removal requests if identity ownership isn't fully validated. Complete Government ID and Photo Match verification check verifies you are the authorized subject.
                   </p>
                 </div>
                 

@@ -20,11 +20,11 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
   const [uploadingDoc, setUploadingDoc] = useState(false);
   const [docUploaded, setDocUploaded] = useState(user.idUploadedFiles && user.idUploadedFiles.length > 0);
 
-  // Liveness States
+  // Photo Match Review States
   const [cameraActive, setCameraActive] = useState(false);
-  const [livenessStage, setLivenessStage] = useState<'idle' | 'align' | 'blink' | 'turn_left' | 'processing' | 'success'>('idle');
-  const [livenessMessage, setLivenessMessage] = useState('Initiate photo match verification when ready.');
-  const [livenessProgress, setLivenessProgress] = useState(0);
+  const [photoMatchStage, setPhotoMatchStage] = useState<'idle' | 'align' | 'blink' | 'turn_left' | 'processing' | 'success'>('idle');
+  const [photoMatchMessage, setPhotoMatchMessage] = useState('Initiate photo match verification when ready.');
+  const [photoMatchProgress, setPhotoMatchProgress] = useState(0);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
@@ -36,19 +36,19 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
 
   async function startCamera() {
     try {
-      setLivenessStage('align');
-      setLivenessMessage('Position face inside the frame.');
+      setPhotoMatchStage('align');
+      setPhotoMatchMessage('Position face inside the frame.');
       setCameraActive(true);
       const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 320, height: 240 } });
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
       }
-      triggerLivenessChallenges();
+      triggerPhotoMatchChallenges();
     } catch (err) {
-      console.warn('Camera failed to start, running fallback liveness stream simulator', err);
+      console.warn('Camera failed to start, running fallback photo match stream simulator', err);
       setCameraActive(true);
-      triggerLivenessChallenges();
+      triggerPhotoMatchChallenges();
     }
   }
 
@@ -60,30 +60,30 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
     setCameraActive(false);
   }
 
-  const triggerLivenessChallenges = () => {
-    setLivenessProgress(10);
-    // Challenge 1: Align Face
+  const triggerPhotoMatchChallenges = () => {
+    setPhotoMatchProgress(10);
+    // Stage 1: Align Face
     setTimeout(() => {
-      setLivenessStage('blink');
-      setLivenessMessage('Blink slowly to verify liveness.');
-      setLivenessProgress(45);
+      setPhotoMatchStage('blink');
+      setPhotoMatchMessage('Blink slowly to verify interaction.');
+      setPhotoMatchProgress(45);
       
-      // Challenge 2: Turn Left
+      // Stage 2: Turn Left
       setTimeout(() => {
-        setLivenessStage('turn_left');
-        setLivenessMessage('Rotate your head slightly left.');
-        setLivenessProgress(80);
+        setPhotoMatchStage('turn_left');
+        setPhotoMatchMessage('Rotate your head slightly left.');
+        setPhotoMatchProgress(80);
 
         // Processing
         setTimeout(() => {
-          setLivenessStage('processing');
-          setLivenessMessage('Processing verification metadata...');
-          setLivenessProgress(95);
+          setPhotoMatchStage('processing');
+          setPhotoMatchMessage('Processing verification match parameter...');
+          setPhotoMatchProgress(95);
 
           // Complete
           setTimeout(async () => {
             stopCamera();
-            await submitLiveness();
+            await submitPhotoMatch();
           }, 2000);
         }, 1800);
       }, 1800);
@@ -118,7 +118,7 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
         if (profileData.success) {
           onVerificationUpdate(profileData.user);
         }
-        // Advance to liveness scanner explanation card
+        // Advance to photo match explanation card
         setStage('camera_tutorial');
       } else {
         alert(data.error);
@@ -130,24 +130,23 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
     }
   }
 
-  async function submitLiveness() {
+  async function submitPhotoMatch() {
     try {
-      const res = await fetch('/api/verify/liveness', {
+      const res = await fetch('/api/verify/photo-match', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${authToken}`
         },
         body: JSON.stringify({
-          livenessCheckPassed: true,
-          faceVector: 'VEC_' + Math.random().toString(36).substring(2, 7)
+          photoMatchPassed: true
         })
       });
       const data = await res.json();
       if (data.success) {
-        setLivenessStage('success');
-        setLivenessMessage('Photo match verification successfully completed.');
-        setLivenessProgress(100);
+        setPhotoMatchStage('success');
+        setPhotoMatchMessage('Photo match verification successfully completed.');
+        setPhotoMatchProgress(100);
 
         // Fetch refreshed user state
         const profileRes = await fetch('/api/auth/me', {
@@ -439,7 +438,7 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
           {/* STAGE 4: ACTIVE BIOMETRIC SCANNING */}
           {stage === 'camera_active' && (
             <div className="text-center space-y-5 py-2">
-              <span className="text-[10px] text-zinc-400 font-mono block uppercase tracking-wider">SECURE LIVENESS CHALLENGE SCREEN</span>
+              <span className="text-[10px] text-zinc-400 font-mono block uppercase tracking-wider">SECURE PHOTO MATCH REVIEW</span>
               
               <div className="relative mx-auto w-44 h-44 rounded-full border-2 border-zinc-800 bg-zinc-950 overflow-hidden flex items-center justify-center">
                 {cameraActive && (
@@ -462,7 +461,7 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
                   </div>
                 )}
 
-                {livenessStage === 'success' && (
+                {photoMatchStage === 'success' && (
                   <div className="absolute inset-0 bg-zinc-950/95 flex items-center justify-center">
                     <CheckCircle2 className="w-10 h-10 text-emerald-40 match-bounce" />
                   </div>
@@ -471,10 +470,10 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
 
               <div className="space-y-2 max-w-xs mx-auto">
                 <p className="text-xs font-medium text-zinc-300 bg-zinc-900 border border-zinc-850 py-1.5 rounded-lg inline-block px-4 font-mono">
-                  {livenessMessage}
+                  {photoMatchMessage}
                 </p>
                 <div className="w-full h-1 bg-zinc-950 rounded-full overflow-hidden border border-zinc-900">
-                  <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${livenessProgress}%` }}></div>
+                  <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${photoMatchProgress}%` }}></div>
                 </div>
               </div>
 
@@ -489,7 +488,7 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
                   </button>
                 )}
                 
-                {!cameraActive && livenessStage !== 'success' ? (
+                {!cameraActive && photoMatchStage !== 'success' ? (
                   <button
                     type="button"
                     onClick={startCamera}
@@ -505,8 +504,8 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
                       onClick={() => {
                         stopCamera();
                         setCameraActive(false);
-                        setLivenessStage('idle');
-                        setLivenessMessage('Standby initialized.');
+                        setPhotoMatchStage('idle');
+                        setPhotoMatchMessage('Standby initialized.');
                       }}
                       className="flex-1 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-250 font-semibold text-xs transition"
                     >
@@ -517,7 +516,7 @@ export default function IdentityVerification({ user, onVerificationUpdate, authT
               </div>
               
               <p className="text-[10px] text-zinc-500 max-w-xs mx-auto font-sans leading-normal">
-                By opening the camera, you grant Velour a transient one-time permission to construct a localized face vector. Raw bytes are destroyed immediately.
+                By opening the camera, you grant Velour a transient one-time permission to verify your face match against the submitted document. No facial templates or embeddings are stored or saved.
               </p>
             </div>
           )}

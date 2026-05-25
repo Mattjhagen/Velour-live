@@ -7,9 +7,10 @@ export interface User {
   adminRole?: 'super_admin' | 'support_agent' | 'compliance_officer';
   mfaEnabled: boolean;
   mfaBackupCode?: string;
-  isVerified: boolean; // government ID + liveness verified
+  isVerified: boolean; // government ID + photo match verified
   idUploadedFiles?: { docName: string; uploadedAt: string }[];
-  livenessCaptured?: boolean;
+  photoMatchCaptured?: boolean;
+  monitoringActive?: boolean;
   subscriptionTier: 'free' | 'pro' | 'enterprise';
   subscriptionActive: boolean;
   createdIP: string;
