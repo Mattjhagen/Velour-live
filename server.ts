@@ -714,7 +714,7 @@ app.get('/api/exposure/search', async (req, res) => {
   }
   lastSearchTimestamps.set(session.userId, now);
 
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
 
   // Geographic Anomaly & Threat/Fraud Scoring Check
   let fraudScore = 15;
