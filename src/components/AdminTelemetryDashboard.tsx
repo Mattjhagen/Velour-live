@@ -10,9 +10,10 @@ import { AuditLog, EnterpriseClient, PrivacyRemovalRequest, PrivacyRequestStatus
 
 interface AdminTelemetryDashboardProps {
   authToken: string;
+  adminRole?: 'super_admin' | 'support_agent' | 'compliance_officer';
 }
 
-export default function AdminTelemetryDashboard({ authToken }: AdminTelemetryDashboardProps) {
+export default function AdminTelemetryDashboard({ authToken, adminRole = 'super_admin' }: AdminTelemetryDashboardProps) {
   const [metrics, setMetrics] = useState<any>(null);
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [clients, setClients] = useState<EnterpriseClient[]>([]);
@@ -47,36 +48,49 @@ export default function AdminTelemetryDashboard({ authToken }: AdminTelemetryDas
   const [supportLoading, setSupportLoading] = useState(false);
   const [escalationTriggerSuccess, setEscalationTriggerSuccess] = useState<string | null>(null);
 
-  // INVESTOR / PARTNERSHIP SLIDES states
-  const [activeSlide, setActiveSlide] = useState(0);
-  const [presentationMode, setPresentationMode] = useState(false);
 
   // Active sub-tab in admin portal
-  const [adminTab, setAdminTab] = useState<'metrics' | 'support' | 'privacy_requests' | 'enterprise' | 'investor'>('metrics');
+  const defaultTab = adminRole === 'support_agent' ? 'privacy_requests' : 'metrics';
+  const [adminTab, setAdminTab] = useState<'metrics' | 'support' | 'privacy_requests' | 'enterprise'>(defaultTab as any);
+  const [providerHealth, setProviderHealth] = useState<any[]>([]);
 
   useEffect(() => {
     fetchAdminData();
     fetchPrivacyRequests();
-  }, []);
+  }, [adminRole]);
 
   async function fetchAdminData() {
     setLoading(true);
     try {
       const headers = { 'Authorization': `Bearer ${authToken}` };
-      const [resMetrics, resLogs, resClients] = await Promise.all([
-        fetch('/api/admin/metrics', { headers }),
-        fetch('/api/admin/logs', { headers }),
-        fetch('/api/admin/enterprise', { headers })
-      ]);
+      const hasMetricsAccess = adminRole === 'super_admin' || adminRole === 'compliance_officer';
+      const hasEnterpriseAccess = adminRole === 'super_admin';
 
-      const metricsData = await resMetrics.json();
-      const logsData = await resLogs.json();
-      const clientsData = await resClients.json();
+      const promises: Promise<any>[] = [];
 
-      if (metricsData.success) {
+      if (hasMetricsAccess) {
+        promises.push(fetch('/api/admin/metrics', { headers }).then(r => r.json()));
+        promises.push(fetch('/api/admin/logs', { headers }).then(r => r.json()));
+        promises.push(fetch('/api/admin/providers/health', { headers }).then(r => r.json()));
+      } else {
+        promises.push(Promise.resolve({ success: true, metrics: null }));
+        promises.push(Promise.resolve({ success: true, logs: [] }));
+        promises.push(Promise.resolve({ success: true, health: [] }));
+      }
+
+      if (hasEnterpriseAccess) {
+        promises.push(fetch('/api/admin/enterprise', { headers }).then(r => r.json()));
+      } else {
+        promises.push(Promise.resolve({ success: true, clients: [] }));
+      }
+
+      const [metricsData, logsData, healthData, clientsData] = await Promise.all(promises);
+
+      if (metricsData.success && metricsData.metrics) {
         setMetrics(metricsData.metrics);
       }
       if (logsData.success) setLogs(logsData.logs);
+      if (healthData.success) setProviderHealth(healthData.health);
       if (clientsData.success) setClients(clientsData.clients);
     } catch (err) {
       console.error('Error fetching admin details', err);
@@ -86,6 +100,7 @@ export default function AdminTelemetryDashboard({ authToken }: AdminTelemetryDas
   }
 
   async function fetchPrivacyRequests() {
+    if (adminRole === 'compliance_officer') return;
     setLoadingRequests(true);
     try {
       const res = await fetch('/api/admin/privacy-requests', {
@@ -260,77 +275,8 @@ export default function AdminTelemetryDashboard({ authToken }: AdminTelemetryDas
     );
   }
 
-  // Slides structure for Investor Presentation Telemetry
-  const partnerSlides = [
-    {
-      title: "Executive Summary & Strategy",
-      metric: "Privacy Operations Model",
-      subtitle: "Consumer and Corporate Protection At Scale",
-      points: [
-        "Compliance-Gated Frameworks: Standardized structures designed to limit unauthorized data scraping.",
-        "Verified Consumer Onboarding: Secure identity verification and automated liveness checks.",
-        "Structured Opt-Out Workflows: Transparent public registry removals managed through official channels.",
-        "Institutional Partnerships: Assisting corporate partners with employee exposure mitigation workflows."
-      ],
-      stats: [
-        { label: "Audit Log Integrity", val: "100% Immutable" },
-        { label: "SLA Response Rate", val: "91.5% Average" },
-        { label: "Regulatory Standing", val: "CCPA / FCRA Aligned" }
-      ]
-    },
-    {
-      title: "Corporate Partnership SLAs",
-      metric: `${clients.length} Active Contracts`,
-      subtitle: "Enterprise Portfolio Protection Metrics",
-      points: [
-        "Seat Utilization: Stark Industries, Wayne Enterprises, and OCP Detroit monitoring channels active.",
-        "Exclusion Domains: Automatically excludes company domain registries from continuous public logs.",
-        "Exposure Mitigation: Automated notifications dispatched when employee credential indicators are flagged.",
-        "Statutory Readiness: Continuous state compliance mapping automatically updating as legislative framework bills pass."
-      ],
-      stats: [
-        { label: "Enterprise ARR", val: `$${clients.reduce((sum, c) => sum + c.annualPremium, 0).toLocaleString()}` },
-        { label: "Utilized Seats", val: `${clients.reduce((sum, c) => sum + c.activeSeats, 0)} Seats` },
-        { label: "Active Incidents", val: "0 Logged" }
-      ]
-    },
-    {
-      title: "Remediation & Turnaround Analytics",
-      metric: "2.8 - 6.2 Business Days",
-      subtitle: "Privacy Opt-Out Velocity Metrics",
-      points: [
-        "Automated Deletion Delivery: Direct API channels to primary registries and data directories.",
-        "Operator Assisted Desks: Secure coordinates dispatched manually for legacy, analog-focused data registries.",
-        "Removal Turnarounds: PimEyes index removals completed in average 4.6 days, DeHashed clearances in 1.6 days.",
-        "Escalation Protocols: Automated notifications triggered if removal responses exceed statutory timelines."
-      ],
-      stats: [
-        { label: "Average Response Time", val: "3.7 Days" },
-        { label: "Success Benchmark", val: "91.5%" },
-        { label: "Evidence Captured Logs", val: "84% Automated" }
-      ]
-    }
-  ];
-
   return (
-    <div className={`space-y-8 text-left ${presentationMode ? 'bg-zinc-950 p-8 sm:p-12 rounded-3xl border border-zinc-800 absolute inset-0 z-50 overflow-y-auto' : ''}`}>
-      
-      {/* Presentation Full-Screen banner option */}
-      {presentationMode && (
-        <div className="flex justify-between items-center border-b border-zinc-900 pb-5 mb-5 shrink-0">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-zinc-400"></span>
-            <span className="text-[10px] font-mono tracking-widest text-[#B0B7C3] uppercase font-bold">Executive Presentation Mode</span>
-          </div>
-          <button 
-            type="button"
-            onClick={() => setPresentationMode(false)}
-            className="px-3 py-1 bg-zinc-90 level hover:bg-zinc-850 text-xs border border-zinc-800 text-zinc-300 rounded font-semibold transition cursor-pointer"
-          >
-            Exit Pitch Mode
-          </button>
-        </div>
-      )}
+    <div className="space-y-8 text-left">
 
       {/* Primary header switcher */}
       <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-4 border-b border-zinc-900 pb-5">
@@ -346,284 +292,129 @@ export default function AdminTelemetryDashboard({ authToken }: AdminTelemetryDas
 
         {/* Dynamic Nav Switcher */}
         <div className="flex flex-wrap gap-1.5 p-1 bg-zinc-900 border border-zinc-800 rounded-lg shrink-0">
-          <button
-            onClick={() => setAdminTab('metrics')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'metrics' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-450 hover:text-zinc-200'}`}
-          >
-            SLA Monitors
-          </button>
-          <button
-            onClick={() => setAdminTab('support')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'support' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-450 hover:text-zinc-200'}`}
-          >
-            Support Access
-          </button>
-          <button
-            onClick={() => setAdminTab('privacy_requests')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'privacy_requests' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-455 hover:text-zinc-200'}`}
-          >
-            Removals ({privacyRequests.length})
-          </button>
-          <button
-            onClick={() => setAdminTab('enterprise')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'enterprise' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-455 hover:text-zinc-200'}`}
-          >
-            Enterprise Portfolio
-          </button>
-          <button
-            onClick={() => setAdminTab('investor')}
-            className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'investor' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-455 hover:text-zinc-200'}`}
-          >
-            Executive Reports
-          </button>
+          {(adminRole === 'super_admin' || adminRole === 'compliance_officer') && (
+            <button
+              onClick={() => setAdminTab('metrics')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'metrics' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-450 hover:text-zinc-200'}`}
+            >
+              System Health
+            </button>
+          )}
+          {(adminRole === 'super_admin' || adminRole === 'support_agent') && (
+            <>
+              <button
+                onClick={() => setAdminTab('support')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'support' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-450 hover:text-zinc-200'}`}
+              >
+                Support Access
+              </button>
+              <button
+                onClick={() => setAdminTab('privacy_requests')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'privacy_requests' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-455 hover:text-zinc-200'}`}
+              >
+                Removals {privacyRequests.length > 0 && `(${privacyRequests.length})`}
+              </button>
+            </>
+          )}
+          {adminRole === 'super_admin' && (
+            <button
+              onClick={() => setAdminTab('enterprise')}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'enterprise' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-455 hover:text-zinc-200'}`}
+            >
+              Enterprise Portfolio
+            </button>
+          )}
         </div>
       </div>
 
-      {/* TAB 1: EXECUTIVE COMPLIANCE MONITORS */}
+      {/* TAB 1: SYSTEM HEALTH & COMPLIANCE */}
       {adminTab === 'metrics' && (
         <div className="space-y-8 animate-in fade-in duration-200">
           
-          {/* Executive KPI summary columns */}
+          {/* Real aggregates summary cards */}
           {metrics && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-left font-sans">
               <div className="bg-zinc-900 border border-zinc-800 p-5 rounded-xl">
-                <span className="text-[10px] font-semibold text-zinc-400 tracking-widest flex items-center gap-1.5 uppercase font-sans">
-                  <HeartHandshake className="w-3.5 h-3.5 text-zinc-400" />
-                  Operator Success Ratio
-                </span>
-                <div className="text-2xl font-bold tracking-tight text-white mt-1.5">{metrics.reremediationSuccessPercentage || "91.5"}%</div>
-                <span className="text-[10px] text-zinc-500 block mt-1">Continuous escalation efficiency</span>
-              </div>
-
-              <div className="bg-zinc-900 border border-zinc-800 p-5 rounded-xl">
-                <span className="text-[10px] font-semibold text-zinc-400 tracking-widest flex items-center gap-1.5 uppercase font-sans">
+                <span className="text-[10px] font-semibold text-zinc-400 tracking-widest flex items-center gap-1.5 uppercase">
                   <Database className="w-3.5 h-3.5 text-zinc-400" />
                   Total Monitored Records
                 </span>
                 <div className="text-2xl font-bold tracking-tight text-white mt-1.5">
-                  {metrics.totalBreachLogs?.toLocaleString() || "1,480"}
+                  {metrics.totalBreachLogs?.toLocaleString() || "0"}
                 </div>
-                <span className="text-[10px] text-zinc-500 block mt-1">Privacy catalog index matches</span>
+                <span className="text-[10px] text-zinc-500 block mt-1">Active privacy index matches</span>
               </div>
 
               <div className="bg-zinc-900 border border-zinc-800 p-5 rounded-xl">
-                <span className="text-[10px] font-semibold text-zinc-400 tracking-widest flex items-center gap-1.5 uppercase font-sans">
+                <span className="text-[10px] font-semibold text-zinc-400 tracking-widest flex items-center gap-1.5 uppercase">
                   <UserCheck className="w-3.5 h-3.5 text-zinc-500" />
                   Verified Customers
                 </span>
-                <div className="text-2xl font-bold tracking-tight text-white mt-1.5">{metrics.totalVerifiedSaves || "12"} Accounts</div>
-                <span className="text-[10px] text-zinc-500 block mt-1">Completed gov-ID & liveness matches</span>
+                <div className="text-2xl font-bold tracking-tight text-white mt-1.5">{metrics.totalVerifiedSaves || "0"} Accounts</div>
+                <span className="text-[10px] text-zinc-500 block mt-1">Completed identity verifications</span>
               </div>
 
               <div className="bg-zinc-900 border border-zinc-800 p-5 rounded-xl">
-                <span className="text-[10px] font-semibold text-zinc-400 tracking-widest flex items-center gap-1.5 uppercase font-sans">
+                <span className="text-[10px] font-semibold text-zinc-400 tracking-widest flex items-center gap-1.5 uppercase">
                   <TrendingUp className="w-3.5 h-3.5 text-zinc-400" />
-                  SaaS Monthly Recurring
+                  System Audit Logs
                 </span>
                 <div className="text-2xl font-bold tracking-tight text-white mt-1.5">
-                  ${metrics.subscriptionConversionAnalytics?.recurringMonthlyRevenueUSD?.toLocaleString() || "1,392"}
+                  {logs.length || "0"} Events
                 </div>
-                <span className="text-[10px] text-zinc-500 block mt-1">PRO Membership: {metrics.subscriptionConversionAnalytics?.conversionRatePercent || "12.5"}% rate</span>
+                <span className="text-[10px] text-zinc-500 block mt-1">Immutable security compliance events</span>
               </div>
             </div>
           )}
 
-          {/* TWO PANEL DATA VISUALIZER (SVG INFOGRAPHICS) */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-            
-            {/* LEFT Panel: Breach Frequency Trends & Active Exposure Class Map */}
-            <div className="lg:col-span-8 bg-zinc-900 border border-zinc-800 p-6 rounded-2xl space-y-6">
-              <div className="border-b border-zinc-800 pb-3 flex justify-between items-center">
-                <div>
-                  <h3 className="text-xs font-semibold text-zinc-250 uppercase tracking-widest flex items-center gap-1.5">
-                    <Activity className="w-4 h-4 text-zinc-550" />
-                    <span>Breach Exposure Trends (12 Month History)</span>
-                  </h3>
-                  <p className="text-[11px] text-zinc-500 mt-0.5 font-sans">Aggregated exposure records scanned per calendar cohort</p>
-                </div>
-                <span className="text-[10px] text-zinc-500 font-mono">Aggregated Source Ledger</span>
-              </div>
-
-              {/* GORGEOUS CUSTOM SVG TREND CHART (NO RECHARTS COMPILATION ERRORS!) */}
-              {metrics?.breachFrequencyTrends && (
-                <div className="space-y-4">
-                  <div className="relative h-44 w-full bg-zinc-950/45 rounded-xl border border-zinc-850 p-4 flex flex-col justify-between">
-                    {/* SVG Line & Shadows */}
-                    <svg className="absolute inset-0 w-full h-full p-4" viewBox="0 0 500 100" preserveAspectRatio="none">
-                      <defs>
-                        <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor="#a1a1aa" stopOpacity="0.08" />
-                          <stop offset="100%" stopColor="#a1a1aa" stopOpacity="0.0" />
-                        </linearGradient>
-                      </defs>
-                      
-                      {/* Grid lines */}
-                      <line x1="0" y1="25" x2="500" y2="25" stroke="#1f2937" strokeWidth="0.5" strokeDasharray="3 3" />
-                      <line x1="0" y1="50" x2="500" y2="50" stroke="#1f2937" strokeWidth="0.5" strokeDasharray="3 3" />
-                      <line x1="0" y1="75" x2="500" y2="75" stroke="#1f2937" strokeWidth="0.5" strokeDasharray="3 3" />
-
-                      {/* Line Path */}
-                      <path 
-                        d="M 10,80 L 50,70 L 90,85 L 130,65 L 170,60 L 210,75 L 250,50 L 290,40 L 330,60 L 370,30 L 410,45 L 450,20 L 490,35" 
-                        fill="none" 
-                        stroke="#a1a1aa" 
-                        strokeWidth="1.5" 
-                        strokeLinecap="round"
-                      />
-
-                      {/* Shaded Area Below */}
-                      <path 
-                        d="M 10,80 L 50,70 L 90,85 L 130,65 L 170,60 L 210,75 L 250,50 L 290,40 L 330,60 L 370,30 L 410,45 L 450,20 L 490,35 L 490,100 L 10,100 Z" 
-                        fill="url(#chartGradient)" 
-                      />
-
-                      {/* Render Dot Landmarks */}
-                      <circle cx="250" cy="50" r="3" fill="#a1a1aa" stroke="#09090b" strokeWidth="1" />
-                      <circle cx="370" cy="30" r="3" fill="#a1a1aa" stroke="#09090b" strokeWidth="1" />
-                      <circle cx="450" cy="20" r="3" fill="#a1a1aa" stroke="#09090b" strokeWidth="1" />
-                    </svg>
-
-                    {/* Y-Axis Label overlays */}
-                    <div className="absolute left-2 top-2 text-[8px] font-mono text-zinc-600">60k</div>
-                    <div className="absolute left-2 top-20 text-[8px] font-mono text-zinc-600">30k</div>
-                    <div className="absolute left-2 bottom-2 text-[8px] font-mono text-zinc-600">0</div>
-                    
-                    <div className="w-full flex justify-between pt-36 text-[9px] text-zinc-550 font-mono px-2">
-                      {metrics.breachFrequencyTrends.map((t: any, idx: number) => (
-                        <span key={idx} className={idx % 2 === 0 ? "text-zinc-550" : "hidden sm:inline text-zinc-600"}>{t.month}</span>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="p-3 bg-zinc-950/40 border border-zinc-850 rounded-xl space-y-1 text-center">
-                    <div className="text-[11px] text-zinc-400 font-sans">
-                      <span className="inline-block w-2 h-2 bg-zinc-500 rounded-full mr-1.5 align-middle"></span>
-                      Aggregated exposure records increased **42%** in Q1 2026 reflecting new registry additions.
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Geographic US Exposure Heatmap Table and Interactive List */}
-              <div className="border-t border-zinc-900 pt-6 space-y-3">
-                <div>
-                  <h4 className="text-xs font-semibold text-zinc-250 uppercase tracking-widest flex items-center gap-1.5">
-                    <Globe className="w-4 h-4 text-zinc-550" />
-                    <span>Regional Exposure Activity</span>
-                  </h4>
-                  <p className="text-[11px] text-zinc-500 mt-0.5">Registry matches by state and calculated regional volume rates</p>
-                </div>
-
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-1.5">
-                  {metrics?.geographicExposureHeatmaps?.map((heat: any, idx: number) => {
-                    const level = heat.count > 250 ? 'Severe Exposure' : heat.count > 120 ? 'High Risk' : 'Standard Exposure';
-                    
-                    return (
-                      <div key={idx} className="bg-zinc-950 border border-zinc-850 p-3 rounded-lg flex flex-col justify-between hover:border-zinc-750 transition duration-150">
-                        <div className="flex justify-between items-center border-b border-zinc-900 pb-1.5">
-                          <span className="font-mono text-[10px] bg-zinc-900 border border-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded leading-none">{heat.code}</span>
-                          <span className="text-[9px] text-zinc-500">{heat.state}</span>
-                        </div>
-                        <div className="pt-2 text-left">
-                          <span className="text-lg font-bold text-white block leading-none font-mono">{heat.count}</span>
-                          <span className="text-[9px] text-zinc-455 font-mono">activity rating: {heat.rate}%</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+          {/* Provider API Health Status Logs */}
+          <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-2xl space-y-4 text-left">
+            <div className="border-b border-zinc-850 pb-3">
+              <h3 className="text-sm font-semibold text-zinc-150 flex items-center gap-2">
+                <Globe className="w-4 h-4 text-zinc-400" />
+                <span>Provider API Integrations Health Status</span>
+              </h3>
+              <p className="text-xs text-zinc-500 mt-1">Live connection integrity, rate limiting metrics, and latency checks for our registry providers.</p>
             </div>
 
-            {/* RIGHT Panel: Category distribution, turn-arounds, unmasked ratios */}
-            <div className="lg:col-span-4 bg-zinc-900 border border-zinc-800 p-6 rounded-2xl space-y-6">
-              
-              {/* Active Exposure Categories */}
-              <div className="space-y-4">
-                <div className="border-b border-zinc-800 pb-2.5">
-                  <h4 className="text-xs font-semibold text-zinc-200 uppercase tracking-widest">Exposure Source Distributions</h4>
-                  <p className="text-[10px] text-zinc-500 mt-0.5">Registry database types in active indexing repositories</p>
-                </div>
-
-                {metrics?.exposureCategories && (
-                  <div className="space-y-3.5 text-xs text-zinc-350">
-                    <div>
-                      <div className="flex justify-between font-mono text-[11px] text-zinc-400 mb-1">
-                        <span>Credential Leaks</span>
-                        <span>{metrics.exposureCategories.credential} items</span>
-                      </div>
-                      <div className="w-full h-1.5 bg-zinc-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-rose-500 rounded-full" style={{ width: '70%' }}></div>
-                      </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {providerHealth.length > 0 ? (
+                providerHealth.map((prov, i) => (
+                  <div key={i} className="bg-zinc-950 border border-zinc-850 p-4 rounded-xl space-y-3 hover:border-zinc-800 transition duration-150">
+                    <div className="flex justify-between items-center pb-2 border-b border-zinc-900/60">
+                      <span className="font-semibold text-zinc-300 text-xs">{prov.name}</span>
+                      <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border leading-none ${
+                        prov.status === 'healthy' 
+                          ? 'bg-emerald-955/20 text-emerald-400 border-emerald-900/30' 
+                          : prov.status === 'degraded' 
+                          ? 'bg-amber-955/20 text-amber-500 border-amber-900/30' 
+                          : 'bg-rose-955/20 text-rose-450 border-rose-900/30'
+                      }`}>
+                        {prov.status}
+                      </span>
                     </div>
-
-                    <div>
-                      <div className="flex justify-between font-mono text-[11px] text-zinc-400 mb-1">
-                        <span>PII Registries (SSNs, Names)</span>
-                        <span>{metrics.exposureCategories.pii} items</span>
+                    <div className="space-y-1.5 text-[10.5px] font-mono text-zinc-550 leading-normal">
+                      <div className="flex justify-between">
+                        <span>Latency:</span>
+                        <span className="text-zinc-300">{prov.latencyMs}ms</span>
                       </div>
-                      <div className="w-full h-1.5 bg-zinc-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-amber-400 rounded-full" style={{ width: '45%' }}></div>
+                      <div className="flex justify-between">
+                        <span>Error count:</span>
+                        <span className="text-zinc-300">{prov.errorCount}</span>
                       </div>
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between font-mono text-[11px] text-zinc-400 mb-1">
-                        <span>Financial/Credit Ledger Logs</span>
-                        <span>{metrics.exposureCategories.financial} items</span>
+                      <div className="flex justify-between">
+                        <span>Mode:</span>
+                        <span className="text-zinc-300">{prov.isMocked ? 'Demo Mode' : 'Live API'}</span>
                       </div>
-                      <div className="w-full h-1.5 bg-zinc-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-emerald-400 rounded-full" style={{ width: '30%' }}></div>
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="flex justify-between font-mono text-[11px] text-zinc-400 mb-1">
-                        <span>Social Photo Indexes</span>
-                        <span>{metrics.exposureCategories.social} items</span>
-                      </div>
-                      <div className="w-full h-1.5 bg-zinc-950 rounded-full overflow-hidden">
-                        <div className="h-full bg-blue-500 rounded-full" style={{ width: '25%' }}></div>
+                      <div className="text-[10px] text-zinc-650 truncate mt-1 pt-1 border-t border-zinc-900/40" title={prov.message}>
+                        {prov.message}
                       </div>
                     </div>
                   </div>
-                )}
-              </div>
-
-              {/* Masked vs Unmasked credential audit counts */}
-              <div className="border-t border-zinc-900 pt-5 space-y-4 font-sans text-xs text-zinc-400">
-                <div className="space-y-1">
-                  <h4 className="text-xs font-semibold text-zinc-200 uppercase tracking-widest leading-none">Masked & Secured Records</h4>
-                  <span className="text-[10px] text-zinc-500 font-mono text-emerald-450 uppercase">ACTIVE POLICY: ALWAYS ENCRYPTED AT REST</span>
-                </div>
-                
-                {metrics?.maskedCredentialExposureCounts && (
-                  <div className="bg-zinc-950 border border-zinc-850 p-4 rounded-xl space-y-2.5">
-                    <div className="flex justify-between items-center text-[11px] pb-1.5 border-b border-zinc-900/40">
-                      <span>Masked exposures catalogued:</span>
-                      <span className="font-mono text-zinc-300 font-bold">{metrics.maskedCredentialExposureCounts.masked}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-[11px]">
-                      <span>Unmasked (Verified User checks only):</span>
-                      <span className="font-mono text-emerald-450 font-bold">{metrics.maskedCredentialExposureCounts.unmasked} unmasked</span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Average Provider Deletion Turnaround times */}
-              <div className="border-t border-zinc-900 pt-5 space-y-3 text-xs">
-                <h4 className="text-xs font-semibold text-zinc-200 uppercase tracking-widest leading-none">Provider Response SLA Matrix</h4>
-                <div className="space-y-2">
-                  {metrics?.averageProviderResponseTimes && Object.entries(metrics.averageProviderResponseTimes).map(([prov, days]: any) => (
-                    <div key={prov} className="flex justify-between items-center font-mono text-[10.5px]">
-                      <span className="text-zinc-500">{prov}:</span>
-                      <span className="text-zinc-300">{days} business days</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
+                ))
+              ) : (
+                <div className="col-span-full text-center text-xs text-zinc-550 italic py-4">No active provider health records available.</div>
+              )}
             </div>
           </div>
 
@@ -1182,114 +973,6 @@ export default function AdminTelemetryDashboard({ authToken }: AdminTelemetryDas
         </div>
       )}
 
-      {/* TAB 5: POLISHED STAKEHOLDER / PARTNERSHIP SLIDES DECK */}
-      {adminTab === 'investor' && (
-        <div className="space-y-6 animate-in fade-in duration-200">
-          
-          {/* Deck Action buttons */}
-          <div className="flex justify-between items-center bg-zinc-900 border border-zinc-800 p-4 rounded-xl flex-wrap gap-3">
-            <div>
-              <h4 className="text-xs font-semibold text-zinc-205 uppercase tracking-widest flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-[#B0B7C3]" />
-                <span>Executive Reporting Workspace</span>
-              </h4>
-              <p className="text-[11px] text-zinc-500">Corporate SLA metrics, compliance audits, and highlights</p>
-            </div>
-
-            <div className="flex gap-2.5">
-              <button 
-                type="button"
-                onClick={() => setPresentationMode(true)}
-                className="px-4 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 border border-zinc-700 rounded-lg text-xs font-semibold transition cursor-pointer flex items-center gap-1.5"
-              >
-                <span>Open Presentation View</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Interactive Slide Panel block */}
-          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 sm:p-10 text-left min-h-[350px] flex flex-col justify-between relative shadow-sm">
-            
-            {/* Top watermarked tag */}
-            <div className="flex justify-between items-center border-b border-zinc-850 pb-4 mb-6">
-              <div>
-                <span className="text-[9px] font-mono uppercase tracking-widest text-[#B0B7C3] block">Reporting Section {activeSlide + 1} of {partnerSlides.length}</span>
-                <p className="text-lg font-bold text-white mt-1">{partnerSlides[activeSlide].title}</p>
-              </div>
-              <span className="text-[10px] text-zinc-500 font-mono bg-zinc-950 px-2.5 py-1 rounded border border-zinc-900">{partnerSlides[activeSlide].metric}</span>
-            </div>
-
-            {/* Slide message */}
-            <div className="space-y-5">
-              <span className="text-xs font-semibold text-emerald-450 block italic">-- {partnerSlides[activeSlide].subtitle}</span>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-start">
-                <ol className="space-y-3.5 text-xs text-zinc-400">
-                  {partnerSlides[activeSlide].points.map((p, idx) => (
-                    <li key={idx} className="flex gap-2.5 leading-relaxed">
-                      <span className="text-emerald-455 font-bold shrink-0">✔</span>
-                      <p>{p}</p>
-                    </li>
-                  ))}
-                </ol>
-
-                {/* Micro metrics card of slide */}
-                <div className="bg-zinc-950 p-5 rounded-xl border border-zinc-850/80 space-y-4">
-                  <span className="text-[10px] font-mono uppercase font-bold text-zinc-550 block">Audit Scorecards</span>
-                  <div className="grid grid-cols-1 gap-3 text-xs">
-                    {partnerSlides[activeSlide].stats.map((s, i) => (
-                      <div key={i} className="flex justify-between border-b border-zinc-900 pb-1.5">
-                        <span className="text-zinc-500">{s.label}:</span>
-                        <span className="text-zinc-200 font-semibold font-mono">{s.val}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Slide controllers at bottom */}
-            <div className="flex justify-between items-center border-t border-zinc-850 pt-8 mt-8 flex-wrap gap-4">
-              <div className="flex gap-1.5">
-                {partnerSlides.map((_, i) => (
-                  <button
-                    key={i}
-                    onClick={() => setActiveSlide(i)}
-                    className={`w-2.5 h-2.5 rounded-full transition-all ${activeSlide === i ? 'bg-zinc-200 w-5' : 'bg-zinc-700 hover:bg-zinc-650'}`}
-                  />
-                ))}
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  disabled={activeSlide === 0}
-                  onClick={() => setActiveSlide(prev => Math.max(0, prev - 1))}
-                  className="px-3.5 py-1.5 border border-zinc-805 hover:border-zinc-700 disabled:opacity-30 rounded-lg text-xs font-semibold text-zinc-350 transition cursor-pointer"
-                >
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  disabled={activeSlide === partnerSlides.length - 1}
-                  onClick={() => setActiveSlide(prev => Math.min(partnerSlides.length - 1, prev + 1))}
-                  className="px-4 py-1.5 bg-zinc-100 hover:bg-zinc-200 disabled:opacity-30 rounded-lg text-xs font-semibold text-zinc-950 transition cursor-pointer"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-
-          </div>
-
-          {/* Core partnership summary values */}
-          <div className="p-5 bg-zinc-905 border border-zinc-800 rounded-xl leading-relaxed text-xs text-zinc-400">
-            <span className="text-[10px] font-mono tracking-wider font-bold text-zinc-500 block mb-1">COMPLIANCE REVIEW STATEMENT:</span>
-            To preserve user confidentiality, all dashboard indicators are aggregates or user-consented assistance events. Arbitrary searches, facial scans, or tracking mechanisms are explicitly locked.
-          </div>
-
-        </div>
-      )}
 
     </div>
   );

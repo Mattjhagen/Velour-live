@@ -4,6 +4,7 @@ export interface User {
   username?: string;
   phoneNumber?: string;
   role: 'user' | 'admin';
+  adminRole?: 'super_admin' | 'support_agent' | 'compliance_officer';
   mfaEnabled: boolean;
   mfaBackupCode?: string;
   isVerified: boolean; // government ID + liveness verified
@@ -15,6 +16,10 @@ export interface User {
   registeredAt: string;
   supportCaseActive?: boolean;
   supportAccessGranted?: boolean;
+  consentTimestamp?: string;
+  consentHistory?: { consentType: string; timestamp: string; ipAddress: string }[];
+  searchCountToday?: number;
+  lastSearchReset?: string;
 }
 
 export type ExposureRiskLevel = 'critical' | 'high' | 'medium' | 'low';

@@ -1,12 +1,26 @@
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import { loadDB, saveDB, logSecurityEvent } from './server-state';
 import { User, BreachRecord, AuditLog, PaymentReceipt, EnterpriseClient, PrivacyRemovalRequest } from './src/types';
+import { 
+  HaveIBeenPwnedProvider, DeHashedProvider, LeakCheckProvider, PentesterProvider, 
+  StripeProvider, EmailProvider, PushNotificationProvider, ProviderHealthRegistry 
+} from './server-providers';
 
 const app = express();
 const PORT = 3000;
+
+// Initialize concrete external API integration providers
+const hibpProvider = new HaveIBeenPwnedProvider();
+const dehashedProvider = new DeHashedProvider();
+const leakcheckProvider = new LeakCheckProvider();
+const pentesterProvider = new PentesterProvider();
+const stripeProvider = new StripeProvider();
+const emailProvider = new EmailProvider();
+const pushProvider = new PushNotificationProvider();
 
 app.use(express.json());
 
@@ -33,11 +47,17 @@ try {
 
 // Simple in-memory active session manager
 interface ExtendedSession {
+  sessionToken: string;
   userId: string;
   email: string;
   role: 'user' | 'admin';
+  adminRole?: 'super_admin' | 'support_agent' | 'compliance_officer';
   mfaPassed: boolean;
   fingerprint: string;
+  ipAddress: string;
+  userAgent: string;
+  createdAt: string;
+  lastActive: string;
 }
 const activeSessions: Record<string, ExtendedSession> = {};
 
@@ -46,7 +66,11 @@ function getSession(req: express.Request): ExtendedSession | null {
   const authHeader = req.headers.authorization;
   if (!authHeader) return null;
   const token = authHeader.replace('Bearer ', '');
-  return activeSessions[token] || null;
+  const session = activeSessions[token] || null;
+  if (session) {
+    session.lastActive = new Date().toISOString();
+  }
+  return session;
 }
 
 // Simulated Rate Limiter (Request counter in-memory per IP)
@@ -89,12 +113,28 @@ app.post('/api/auth/register', (req, res) => {
   }
 
   const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const isVelour = email.trim().toLowerCase().endsWith('@velour.io');
+  const isGov = email.trim().toLowerCase().endsWith('@breachguard.gov');
+  const isAdmin = isVelour || isGov;
+  
+  let adminRole: 'super_admin' | 'support_agent' | 'compliance_officer' | undefined = undefined;
+  if (isVelour) {
+    if (email.trim().toLowerCase().startsWith('super') || email.trim().toLowerCase() === 'admin@velour.io') {
+      adminRole = 'super_admin';
+    } else {
+      adminRole = 'support_agent';
+    }
+  } else if (isGov) {
+    adminRole = 'compliance_officer';
+  }
+
   const newUser: User = {
     id: `usr_${Math.random().toString(36).substring(2, 11)}`,
     email: email.trim().toLowerCase(),
     username: username ? username.trim() : undefined,
     phoneNumber: phoneNumber ? phoneNumber.trim() : undefined,
-    role: (email.trim().toLowerCase().endsWith('@velour.io') || email.trim().toLowerCase().endsWith('@breachguard.gov')) ? 'admin' : 'user',
+    role: isAdmin ? 'admin' : 'user',
+    adminRole,
     mfaEnabled: true, // Mandatory 2FA as per requirements
     mfaBackupCode: `BG-BACKUP-${Math.floor(100000 + Math.random() * 900000)}`,
     isVerified: false,
@@ -145,12 +185,19 @@ app.post('/api/auth/login', (req, res) => {
 
   // Issue temporary/pre-MFA token
   const mfaChallengeToken = `mfa_challenge_${Math.random().toString(36).substring(2, 15)}`;
+  const userAgent = req.headers['user-agent'] || 'Unknown User Agent';
   activeSessions[mfaChallengeToken] = {
+    sessionToken: '',
     userId: user.id,
     email: user.email,
     role: user.role,
+    adminRole: user.adminRole,
     mfaPassed: false,
-    fingerprint: deviceFingerprint || 'generic-navigator'
+    fingerprint: deviceFingerprint || 'generic-navigator',
+    ipAddress: ip,
+    userAgent,
+    createdAt: new Date().toISOString(),
+    lastActive: new Date().toISOString()
   };
 
   logSecurityEvent(
@@ -209,7 +256,9 @@ app.post('/api/auth/verify-2fa', (req, res) => {
   const authToken = `auth_token_${Math.random().toString(36).substring(2, 15)}`;
   activeSessions[authToken] = {
     ...session,
-    mfaPassed: true
+    sessionToken: authToken,
+    mfaPassed: true,
+    lastActive: new Date().toISOString()
   };
   delete activeSessions[challengeToken]; // Clean challenge token
 
@@ -230,6 +279,7 @@ app.post('/api/auth/verify-2fa', (req, res) => {
       id: user.id,
       email: user.email,
       role: user.role,
+      adminRole: user.adminRole,
       isVerified: user.isVerified,
       subscriptionTier: user.subscriptionTier,
       subscriptionActive: user.subscriptionActive,
@@ -257,12 +307,13 @@ app.get('/api/auth/me', (req, res) => {
   if (!user) {
     return res.status(404).json({ error: 'User does not exist.' });
   }
-    res.json({
+  res.json({
     success: true,
     user: {
       id: user.id,
       email: user.email,
       role: user.role,
+      adminRole: user.adminRole,
       isVerified: user.isVerified,
       idUploadedFiles: user.idUploadedFiles,
       livenessCaptured: user.livenessCaptured,
@@ -271,8 +322,97 @@ app.get('/api/auth/me', (req, res) => {
       registeredAt: user.registeredAt,
       mfaBackupCode: user.mfaBackupCode,
       supportCaseActive: user.supportCaseActive ?? false,
-      supportAccessGranted: user.supportAccessGranted ?? false
+      supportAccessGranted: user.supportAccessGranted ?? false,
+      consentTimestamp: user.consentTimestamp,
+      consentHistory: user.consentHistory || []
     }
+  });
+});
+
+app.get('/api/auth/sessions', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const sessions = Object.values(activeSessions)
+    .filter(s => s.userId === session.userId)
+    .map(s => ({
+      sessionToken: s.sessionToken,
+      ipAddress: s.ipAddress,
+      userAgent: s.userAgent,
+      createdAt: s.createdAt,
+      lastActive: s.lastActive,
+      isCurrent: s.sessionToken === req.headers.authorization?.replace('Bearer ', '')
+    }));
+
+  res.json({ success: true, sessions });
+});
+
+app.post('/api/auth/sessions/revoke', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { tokenToRevoke } = req.body;
+  if (!tokenToRevoke) return res.status(400).json({ error: 'Session token to revoke is required.' });
+
+  const targetSession = activeSessions[tokenToRevoke];
+  if (!targetSession || targetSession.userId !== session.userId) {
+    return res.status(403).json({ error: 'Unauthorized or session not found.' });
+  }
+
+  delete activeSessions[tokenToRevoke];
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  logSecurityEvent(
+    session.userId,
+    session.email,
+    'SESSION_REVOKED',
+    'success',
+    ip,
+    session.fingerprint,
+    `Revoked active session connection.`
+  );
+
+  res.json({ success: true, message: 'Session revoked successfully.' });
+});
+
+app.post('/api/user/record-consent', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { consentType } = req.body;
+  if (!consentType) return res.status(400).json({ error: 'Consent type is required.' });
+
+  const db = loadDB();
+  const user = db.users.find(u => u.id === session.userId);
+  if (!user) return res.status(404).json({ error: 'Subject not found.' });
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const timestamp = new Date().toISOString();
+
+  if (!user.consentHistory) user.consentHistory = [];
+  user.consentHistory.push({
+    consentType,
+    timestamp,
+    ipAddress: ip
+  });
+  user.consentTimestamp = timestamp;
+
+  saveDB(db);
+
+  logSecurityEvent(
+    user.id,
+    user.email,
+    'CONSENT_RECORDED',
+    'success',
+    ip,
+    session.fingerprint,
+    `Recorded user query authorization consent (${consentType}).`
+  );
+
+  res.json({
+    success: true,
+    consentTimestamp: user.consentTimestamp,
+    consentHistory: user.consentHistory
   });
 });
 
@@ -406,7 +546,7 @@ app.post('/api/verify/liveness', (req, res) => {
 });
 
 // 3. SECURE EXPOSURE ENGINE (Search with consent and masking logic)
-app.get('/api/exposure/search', (req, res) => {
+app.get('/api/exposure/search', async (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Authentication token required.' });
 
@@ -417,13 +557,37 @@ app.get('/api/exposure/search', (req, res) => {
     return res.status(400).json({ error: 'Query parameter is required.' });
   }
 
-  if (!consentConfirmed) {
-    return res.status(400).json({ error: 'Strict Safeguard Error: Explicit consent of search authority was index failure.' });
-  }
-
   const db = loadDB();
   const user = db.users.find(u => u.id === session.userId);
   if (!user) return res.status(404).json({ error: 'User not found.' });
+
+  // User Search Rate Limiter / Abuse Safeguards
+  const now = Date.now();
+  if (!user.searchCountToday) {
+    user.searchCountToday = 0;
+    user.lastSearchReset = new Date().toISOString();
+  } else if (now - new Date(user.lastSearchReset || now).getTime() > 24 * 60 * 60 * 1000) {
+    user.searchCountToday = 0;
+    user.lastSearchReset = new Date().toISOString();
+  }
+
+  const searchLimit = user.subscriptionTier === 'free' ? 5 : 50;
+  if (user.searchCountToday >= searchLimit) {
+    return res.status(429).json({
+      error: `Daily registry query limit reached (${searchLimit} searches). Please upgrade or contact support for higher limits.`
+    });
+  }
+
+  user.searchCountToday++;
+  saveDB(db);
+
+  // Verify search authorization consent has not expired (24h validity)
+  const consentAgeMs = user.consentTimestamp ? (now - new Date(user.consentTimestamp).getTime()) : Infinity;
+  const isConsentValid = consentConfirmed && (consentAgeMs <= 24 * 60 * 60 * 1000);
+
+  if (!isConsentValid) {
+    return res.status(400).json({ error: 'Consent expired. Please confirm search authorization consent again.' });
+  }
 
   const normalizedQuery = query.trim().toLowerCase();
   const userOwnEmail = user.email.toLowerCase();
@@ -449,13 +613,32 @@ app.get('/api/exposure/search', (req, res) => {
     });
   }
 
-  // Retrieve records matching email target
-  const matchedRecords = db.breachRecords.filter(
-    record => record.email.toLowerCase() === normalizedQuery
-  );
+  // Real external API searches executed concurrently (with fallback handling, timeout, retries)
+  const [hibpRes, dehashedRes, leakcheckRes, pentesterRes] = await Promise.all([
+    hibpProvider.search(normalizedQuery),
+    dehashedProvider.search(normalizedQuery),
+    leakcheckProvider.search(normalizedQuery),
+    pentesterProvider.search(normalizedQuery)
+  ]);
+
+  // Combine and de-duplicate results based on ID
+  const aggregatedResults: any[] = [];
+  const addedIds = new Set<string>();
+
+  const addResult = (record: any) => {
+    if (!addedIds.has(record.id)) {
+      addedIds.add(record.id);
+      aggregatedResults.push(record);
+    }
+  };
+
+  hibpRes.data.forEach(addResult);
+  dehashedRes.data.forEach(addResult);
+  leakcheckRes.data.forEach(addResult);
+  pentesterRes.data.forEach(addResult);
 
   // Return conditionally masked representations based on identity verification state
-  const finalResults = matchedRecords.map(record => {
+  const finalResults = aggregatedResults.map(record => {
     return {
       id: record.id,
       source: record.source,
@@ -478,15 +661,24 @@ app.get('/api/exposure/search', (req, res) => {
     'success',
     ip,
     session.fingerprint,
-    `Queried exposure archives for target: ${normalizedQuery}. Found ${matchedRecords.length} exposure records.`
+    `Queried exposure archives for target: ${normalizedQuery}. Found ${finalResults.length} exposure records.`
   );
 
   res.json({
     success: true,
     results: finalResults,
     isVerifiedUser: user.isVerified,
-    queriedTarget: query
+    queriedTarget: query,
+    providerHealth: ProviderHealthRegistry.getHealth()
   });
+});
+
+app.get('/api/admin/providers/health', (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin' || (session.adminRole !== 'super_admin' && session.adminRole !== 'compliance_officer')) {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks compliance or executive administration role.' });
+  }
+  res.json({ success: true, health: ProviderHealthRegistry.getHealth() });
 });
 
 // 4. GEMINI SMART ADVISOR / REMEDIATION GENERATION
@@ -824,8 +1016,8 @@ app.post('/api/privacy-requests', (req, res) => {
 
 app.get('/api/admin/privacy-requests', (req, res) => {
   const session = getSession(req);
-  if (!session || session.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden. Admin credentials required.' });
+  if (!session || session.role !== 'admin' || (session.adminRole !== 'super_admin' && session.adminRole !== 'support_agent')) {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks support operations role.' });
   }
 
   const db = loadDB();
@@ -835,8 +1027,8 @@ app.get('/api/admin/privacy-requests', (req, res) => {
 
 app.post('/api/admin/privacy-requests/:id/update', (req, res) => {
   const session = getSession(req);
-  if (!session || session.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden. Admin credentials required.' });
+  if (!session || session.role !== 'admin' || (session.adminRole !== 'super_admin' && session.adminRole !== 'support_agent')) {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks support operations role.' });
   }
 
   const { id } = req.params;
@@ -879,8 +1071,8 @@ app.post('/api/admin/privacy-requests/:id/update', (req, res) => {
 // 6.7 SECURE AUDITED SUPPORT ACCESS DESK
 app.get('/api/admin/support-search', (req, res) => {
   const session = getSession(req);
-  if (!session || session.role !== 'admin') {
-    return res.status(403).json({ error: 'Access Restrained: Admin credentials are required.' });
+  if (!session || session.role !== 'admin' || (session.adminRole !== 'super_admin' && session.adminRole !== 'support_agent')) {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks support operations role.' });
   }
 
   const email = (req.query.email as string || '').trim().toLowerCase();
@@ -952,8 +1144,8 @@ app.get('/api/admin/support-search', (req, res) => {
 // 7. ADMIN COMPLIANCE / AUDIT METRICS TELEMETRY
 app.get('/api/admin/metrics', (req, res) => {
   const session = getSession(req);
-  if (!session || session.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden. Admin credentials required.' });
+  if (!session || session.role !== 'admin' || (session.adminRole !== 'super_admin' && session.adminRole !== 'compliance_officer')) {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks compliance or executive administration role.' });
   }
 
   const db = loadDB();
@@ -966,79 +1158,12 @@ app.get('/api/admin/metrics', (req, res) => {
     .filter(p => p.status === 'approved')
     .reduce((sum, p) => sum + p.amount, 0);
 
-  // Advanced compliance aggregates
-  const exposureSourceDistribution = {
-    'HaveIBeenPwned': db.breachRecords.filter(r => r.source === 'HaveIBeenPwned').length || 180,
-    'Pentester NPD': db.breachRecords.filter(r => r.source === 'Pentester NPD').length || 124,
-    'PimEyes': db.breachRecords.filter(r => r.source === 'PimEyes').length || 42,
-    'DeHashed': db.breachRecords.filter(r => r.source === 'DeHashed').length || 95,
-    'Hudson Rock': db.breachRecords.filter(r => r.source === 'Hudson Rock').length || 64
-  };
-
-  const exposureCategories = {
-    'credential': db.breachRecords.filter(r => r.category === 'credential').length || 164,
-    'pii': db.breachRecords.filter(r => r.category === 'pii').length || 98,
-    'financial': db.breachRecords.filter(r => r.category === 'financial').length || 54,
-    'social': db.breachRecords.filter(r => r.category === 'social').length || 42
-  };
-
-  const breachFrequencyTrends = [
-    { month: 'Jun 25', count: 18 },
-    { month: 'Jul 25', count: 24 },
-    { month: 'Aug 25', count: 15 },
-    { month: 'Sep 25', count: 29 },
-    { month: 'Oct 25', count: 32 },
-    { month: 'Nov 25', count: 21 },
-    { month: 'Dec 25', count: 38 },
-    { month: 'Jan 26', count: 42 },
-    { month: 'Feb 26', count: 30 },
-    { month: 'Mar 26', count: 47 },
-    { month: 'Apr 26', count: 35 },
-    { month: 'May 26', count: db.breachRecords.length * 4 || 24 }
-  ];
-
   const removals = db.privacyRequests || [];
   const removalCompletionMetrics = {
-    completed: removals.filter(r => r.status === 'actioned').length || 18,
-    inProgress: removals.filter(r => r.status === 'in_review' || r.status === 'submitted' || r.status === 'awaiting_response').length || 12,
-    queued: removals.filter(r => r.status === 'queued').length || 4,
-    failed: removals.filter(r => r.status === 'unavailable').length || 2
-  };
-
-  const averageProviderResponseTimes = {
-    'PimEyes': 4.6, // in days
-    'National Public Data': 6.2,
-    'Canva Systems': 2.8,
-    'DataBroker Index': 5.1,
-    'DeHashed': 1.6
-  };
-
-  const geographicExposureHeatmaps = [
-    { state: 'California', code: 'CA', count: 384, rate: 89 },
-    { state: 'Texas', code: 'TX', count: 292, rate: 74 },
-    { state: 'New York', code: 'NY', count: 254, rate: 81 },
-    { state: 'Florida', code: 'FL', count: 212, rate: 68 },
-    { state: 'Illinois', code: 'IL', count: 145, rate: 58 },
-    { state: 'Minnesota', code: 'MN', count: 112, rate: 91 },
-    { state: 'Ohio', code: 'OH', count: 94, rate: 45 },
-    { state: 'Washington', code: 'WA', count: 88, rate: 83 }
-  ];
-
-  const maskedCredentialExposureCounts = {
-    masked: db.breachRecords.length * 3 + 45,
-    unmasked: db.breachRecords.length
-  };
-
-  const premiumApproved = db.payments.filter(p => p.status === 'approved' && p.type === 'subscription_monthly').length || 48;
-  const premiumTotal = db.users.filter(u => u.role === 'user').length || 120;
-
-  const subscriptionConversionAnalytics = {
-    totalUsers: db.users.length,
-    freeTierCount: db.users.filter(u => u.subscriptionTier === 'free').length,
-    proTierCount: db.users.filter(u => u.subscriptionTier === 'pro').length,
-    enterpriseCount: db.users.filter(u => u.subscriptionTier === 'enterprise').length,
-    conversionRatePercent: Number(((premiumApproved / (premiumTotal || 1)) * 100).toFixed(1)) || 12.5,
-    recurringMonthlyRevenueUSD: premiumApproved * 29
+    completed: removals.filter(r => r.status === 'actioned').length,
+    inProgress: removals.filter(r => r.status === 'in_review' || r.status === 'submitted' || r.status === 'awaiting_response').length,
+    queued: removals.filter(r => r.status === 'queued').length,
+    failed: removals.filter(r => r.status === 'unavailable').length
   };
 
   res.json({
@@ -1051,23 +1176,15 @@ app.get('/api/admin/metrics', (req, res) => {
       totalVerifiedSaves,
       revenueUSD: totalRevenueCents / 100,
       activePrepaidBlocks: db.payments.filter(p => p.prepaidRejected).length,
-      exposureSourceDistribution,
-      exposureCategories,
-      breachFrequencyTrends,
-      removalCompletionMetrics,
-      averageProviderResponseTimes,
-      geographicExposureHeatmaps,
-      maskedCredentialExposureCounts,
-      remediationSuccessPercentage: 91.5,
-      subscriptionConversionAnalytics
+      removalCompletionMetrics
     }
   });
 });
 
 app.get('/api/admin/logs', (req, res) => {
   const session = getSession(req);
-  if (!session || session.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden. Admin credentials required.' });
+  if (!session || session.role !== 'admin' || (session.adminRole !== 'super_admin' && session.adminRole !== 'compliance_officer')) {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks compliance or executive administration role.' });
   }
   const db = loadDB();
   res.json({ success: true, logs: db.auditLogs });
@@ -1075,8 +1192,8 @@ app.get('/api/admin/logs', (req, res) => {
 
 app.get('/api/admin/enterprise', (req, res) => {
   const session = getSession(req);
-  if (!session || session.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden. Admin credentials required.' });
+  if (!session || session.role !== 'admin' || session.adminRole !== 'super_admin') {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks enterprise portfolio manager role.' });
   }
   const db = loadDB();
   res.json({ success: true, clients: db.enterpriseClients });
@@ -1085,8 +1202,8 @@ app.get('/api/admin/enterprise', (req, res) => {
 // Add Enterprise Client Action
 app.post('/api/admin/enterprise/add', (req, res) => {
   const session = getSession(req);
-  if (!session || session.role !== 'admin') {
-    return res.status(403).json({ error: 'Forbidden. Admin credentials required.' });
+  if (!session || session.role !== 'admin' || session.adminRole !== 'super_admin') {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks enterprise portfolio manager role.' });
   }
 
   const { name, domain, totalSeats, annualPremium } = req.body;
@@ -1140,6 +1257,45 @@ async function startServer() {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Start Ephemeral Document Deletion schedule (runs every minute to scrub documents older than 5 minutes)
+  setInterval(() => {
+    try {
+      const db = loadDB();
+      let modified = false;
+      const now = Date.now();
+      const fiveMinutesAgo = now - 5 * 60 * 1000;
+
+      db.users.forEach(user => {
+        if (user.idUploadedFiles && user.idUploadedFiles.length > 0) {
+          const originalLength = user.idUploadedFiles.length;
+          user.idUploadedFiles = user.idUploadedFiles.filter(file => {
+            const uploadedTime = new Date(file.uploadedAt).getTime();
+            return uploadedTime > fiveMinutesAgo;
+          });
+
+          if (user.idUploadedFiles.length !== originalLength) {
+            modified = true;
+            logSecurityEvent(
+              user.id,
+              user.email,
+              'IDENTITY_DOCUMENT_PURGED',
+              'success',
+              '127.0.0.1',
+              'System-Cron-Agent',
+              `Automatically scrubbed expired verification documents from transient storage.`
+            );
+          }
+        }
+      });
+
+      if (modified) {
+        saveDB(db);
+      }
+    } catch (err) {
+      console.error('Error in ephemeral document sweeper job:', err);
+    }
+  }, 60 * 1000);
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server successfully engaged at: http://localhost:${PORT}`);

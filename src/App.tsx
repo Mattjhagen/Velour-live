@@ -13,6 +13,7 @@ import ExposureTimeline from './components/ExposureTimeline';
 import StripeCheckoutModal from './components/StripeCheckoutModal';
 import AdminTelemetryDashboard from './components/AdminTelemetryDashboard';
 import PrivacyActionsTracker from './components/PrivacyActionsTracker';
+import ErrorBoundary from './components/ErrorBoundary';
 import { User, BreachRecord } from './types';
 
 export default function App() {
@@ -37,6 +38,7 @@ export default function App() {
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
+  const [providerHealthList, setProviderHealthList] = useState<any[]>([]);
 
   // Gemini Smart Remediation Advice
   const [remediationAdvice, setRemediationAdvice] = useState<string>('');
@@ -49,9 +51,14 @@ export default function App() {
   const [simulatedPush, setSimulatedPush] = useState<string | null>(null);
 
   // Navigation / Modal
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'timeline' | 'remediation' | 'privacy_actions' | 'admin'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'timeline' | 'remediation' | 'privacy_actions' | 'admin' | 'privacy'>('dashboard');
   const [stripeOpen, setStripeOpen] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
+
+  // Session & Device management states
+  const [userSessions, setUserSessions] = useState<any[]>([]);
+  const [loadingSessions, setLoadingSessions] = useState(false);
+  const [sessionsError, setSessionsError] = useState<string | null>(null);
 
   // Real-time alerts triggers
   const [triggers, setTriggers] = useState<{ id: string; msg: string; type: 'info' | 'danger' }[]>([]);
@@ -61,6 +68,12 @@ export default function App() {
       fetchProfile();
     }
   }, [authToken]);
+
+  useEffect(() => {
+    if (activeTab === 'privacy') {
+      fetchUserSessions();
+    }
+  }, [activeTab]);
 
   useEffect(() => {
     if (searchResults.length > 0) {
@@ -89,6 +102,53 @@ export default function App() {
       setLoadingProfile(false);
     }
   }
+
+  const fetchUserSessions = async () => {
+    if (!authToken) return;
+    setLoadingSessions(true);
+    setSessionsError(null);
+    try {
+      const res = await fetch('/api/auth/sessions', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setUserSessions(data.sessions);
+      } else {
+        setSessionsError(data.error || 'Failed to fetch sessions');
+      }
+    } catch (err) {
+      setSessionsError('Connection error fetching sessions.');
+    } finally {
+      setLoadingSessions(false);
+    }
+  };
+
+  const revokeUserSession = async (tokenToRevoke: string) => {
+    if (!authToken) return;
+    try {
+      const res = await fetch('/api/auth/sessions/revoke', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({ tokenToRevoke })
+      });
+      const data = await res.json();
+      if (data.success) {
+        const currentToken = authToken;
+        if (tokenToRevoke === currentToken) {
+          handleLogout();
+        } else {
+          fetchUserSessions();
+          showNotice('Session revoked successfully.');
+        }
+      }
+    } catch (err) {
+      console.error('Failed to revoke session:', err);
+    }
+  };
 
   async function handleSupportConsentUpdate(caseActive: boolean, accessGranted: boolean) {
     if (!authToken) return;
@@ -201,6 +261,23 @@ export default function App() {
     const q = customQuery || searchQuery;
     if (!q) return;
 
+    // Record search consent selection on server prior to active search dispatch
+    if (consentConfirmed && !customQuery) {
+      try {
+        await fetch('/api/user/record-consent', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`
+          },
+          body: JSON.stringify({ consentType: `Search Registry Authorization for ${q}` })
+        });
+        fetchProfile();
+      } catch (err) {
+        console.error('Failed to log consent status:', err);
+      }
+    }
+
     setSearching(true);
     setSearchError(null);
 
@@ -214,6 +291,9 @@ export default function App() {
         setSearchResults([]);
       } else {
         setSearchResults(data.results);
+        if (data.providerHealth) {
+          setProviderHealthList(data.providerHealth);
+        }
       }
     } catch (err) {
       setSearchError('Network error connecting to search database.');
@@ -273,7 +353,8 @@ export default function App() {
   const riskStatus = calculateRiskAssessment(averageRisk);
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-105 flex flex-col justify-between font-sans selection:bg-zinc-800 relative overflow-hidden">
+    <ErrorBoundary>
+      <div className="min-h-screen bg-zinc-950 text-zinc-105 flex flex-col justify-between font-sans selection:bg-zinc-800 relative overflow-hidden">
       
       {/* Background Grid Pattern (inspired by eventtransport.space) */}
       <div className="absolute inset-x-0 top-0 h-[640px] bg-[linear-gradient(to_right,#1f2937_1px,transparent_1px),linear-gradient(to_bottom,#1f2937_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_65%,transparent_100%)] opacity-[0.06] pointer-events-none"></div>
@@ -316,6 +397,12 @@ export default function App() {
                 className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${activeTab === 'remediation' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
                 AI Guidance
+              </button>
+              <button
+                onClick={() => setActiveTab('privacy')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${activeTab === 'privacy' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-400 hover:text-zinc-200'}`}
+              >
+                Privacy & Sessions
               </button>
               {currentUser.role === 'admin' && (
                 <button
@@ -582,36 +669,41 @@ export default function App() {
                 <MockDeviceFingerprint onFingerprintReady={setDeviceHash} />
               </div>
             </div>
-
-            {/* 2. EXPOSURE PREVIEW CARDS SECTION */}
-            <div className="space-y-6 text-left pt-6">
+            {/* 2. REGISTRY COVERAGE & STATUS */}
+            <div className="space-y-4 text-left pt-6">
               <div>
-                <h3 className="text-zinc-300 font-semibold text-lg tracking-tight">Monitored registries</h3>
-                <p className="text-zinc-500 text-xs">Simulated preview of core record indexes compiled by the platform.</p>
+                <h3 className="text-zinc-300 font-semibold text-lg tracking-tight">Registry Coverage</h3>
+                <p className="text-zinc-500 text-xs">Velour queries the following independent registry databases on demand under explicit user consent.</p>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 {[
-                  { title: "Credential Leak", count: "12 exposed", risk: "Severe Alert", source: "HaveIBeenPwned", desc: "Monitored email leaked within public text archives." },
-                  { title: "IP Address Log", count: "4 matches", risk: "Medium Risk", source: "DeHashed", desc: "Historical coordinate addresses linked to prior login logs." },
-                  { title: "Social Photo Registry", count: "Clean", risk: "Secure", source: "PimEyes", desc: "No biometric photo exposures identified on monitored URLs." },
-                  { title: "Financial Ledger Check", count: "None", risk: "Clean", source: "OSINT Public Ledger", desc: "Transactional credit indexes showing correct tracking values." }
-                ].map((prev, idx) => (
-                  <div key={idx} className="bg-zinc-900/30 border border-zinc-850/80 rounded-xl p-5 space-y-3">
-                    <div className="flex justify-between items-start gap-1">
-                      <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">{prev.source}</span>
-                      <span className={`text-[10px] font-medium px-2 py-0.5 rounded ${prev.risk === 'Severe Alert' ? 'bg-rose-955/20 text-rose-350 border border-rose-900/40' : prev.risk === 'Clean' || prev.risk === 'Secure' ? 'bg-zinc-800 text-zinc-400 border border-zinc-750' : 'bg-blue-955/20 text-blue-300'}`}>{prev.risk}</span>
+                  { name: "HaveIBeenPwned", desc: "Monitored credential leak datasets." },
+                  { name: "DeHashed", desc: "Exposed database log coordinates." },
+                  { name: "LeakCheck", desc: "Historical plaintext archive matches." },
+                  { name: "Pentester NPD", desc: "Public directory records mapping." }
+                ].map((prov, idx) => {
+                  const matchingHealth = providerHealthList.find(p => p.name.toLowerCase().includes(prov.name.toLowerCase().split(' ')[0]));
+                  const status = matchingHealth ? matchingHealth.status : 'operational';
+                  
+                  return (
+                    <div key={idx} className="bg-zinc-900/30 border border-zinc-850/80 rounded-xl p-5 space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">{prov.name}</span>
+                        <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border leading-none ${
+                          status === 'healthy' || status === 'operational'
+                            ? 'bg-zinc-900/60 text-zinc-400 border-zinc-800' 
+                            : 'bg-amber-955/20 text-amber-500 border-amber-900/30'
+                        }`}>
+                          {status}
+                        </span>
+                      </div>
+                      <div>
+                        <p className="text-xs text-zinc-455 leading-relaxed">{prov.desc}</p>
+                      </div>
                     </div>
-                    <div>
-                      <h4 className="text-sm font-semibold text-zinc-200">{prev.title}</h4>
-                      <p className="text-xs text-zinc-450 mt-1 leading-normal">{prev.desc}</p>
-                    </div>
-                    <div className="text-[10px] font-mono text-zinc-550 border-t border-zinc-900/60 pt-2 flex justify-between">
-                      <span>status:</span>
-                      <span className="font-semibold text-zinc-300">{prev.count}</span>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
 
@@ -700,6 +792,12 @@ export default function App() {
               >
                 Guidance
               </button>
+              <button
+                onClick={() => setActiveTab('privacy')}
+                className={`px-4 py-2.5 text-xs font-semibold rounded-md transition-all shrink-0 ${activeTab === 'privacy' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-400'}`}
+              >
+                Privacy
+              </button>
               {currentUser?.role === 'admin' && (
                 <button
                   onClick={() => setActiveTab('admin')}
@@ -741,11 +839,21 @@ export default function App() {
                   <div className="bg-zinc-900/40 border border-zinc-800/80 rounded-2xl p-6 sm:p-8 shadow-sm relative">
                     <h3 className="text-sm font-semibold tracking-tight text-zinc-200 flex items-center gap-2 mb-2">
                       <Search className="w-4 h-4 text-zinc-400" />
-                      <span>Audit registry exposure</span>
+                      <span>Search registry exposure</span>
                     </h3>
                     <p className="text-xs text-zinc-500 leading-relaxed mb-5 font-sans">
                       Enter your email address to query regional exposure records and verified public databases.
                     </p>
+
+                    {providerHealthList.some(p => p.status !== 'healthy') && (
+                      <div className="mb-4 p-3 bg-amber-955/15 border border-amber-900/40 rounded-xl text-xs text-amber-300 flex items-start gap-2 leading-relaxed">
+                        <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-semibold block text-zinc-200">Registry connection degraded</span>
+                          <span>Some third-party search indexes are responding slowly or are temporarily offline. Velour will automatically display cached secure representations.</span>
+                        </div>
+                      </div>
+                    )}
 
                     <form onSubmit={(e) => { e.preventDefault(); executeSearch(); }} className="space-y-4">
                       <div className="flex flex-col sm:flex-row gap-2">
@@ -763,7 +871,7 @@ export default function App() {
                           className="px-5 py-2.5 rounded-xl bg-zinc-100 hover:bg-zinc-200 disabled:opacity-40 text-zinc-950 font-semibold text-xs transition flex items-center justify-center gap-1.5"
                         >
                           {searching ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                          <span>Run Audit</span>
+                          <span>Search</span>
                         </button>
                       </div>
 
@@ -1211,7 +1319,164 @@ export default function App() {
 
             {/* 4. TAB: ADMINISTRATIVE COMPLIANCE CENTRE */}
             {activeTab === 'admin' && currentUser?.role === 'admin' && (
-              <AdminTelemetryDashboard authToken={authToken} />
+              <AdminTelemetryDashboard authToken={authToken} adminRole={currentUser.adminRole} />
+            )}
+
+            {/* 5. TAB: PRIVACY POLICY & SESSION MANAGEMENT */}
+            {activeTab === 'privacy' && (
+              <div className="space-y-6 animate-in fade-in duration-200">
+                
+                {/* CONSENT HISTORY */}
+                <div className="bg-zinc-900/40 border border-zinc-850/60 rounded-2xl p-6 sm:p-8 shadow-sm space-y-4">
+                  <div className="border-b border-zinc-850 pb-4 text-left">
+                    <h3 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+                      <ShieldCheck className="w-4 h-4 text-zinc-400" />
+                      <span>Consent History Logs</span>
+                    </h3>
+                    <p className="text-xs text-zinc-500 mt-1">Audit logs of your explicit consent choices for registry checks and data removals.</p>
+                  </div>
+                  
+                  {currentUser?.consentHistory && currentUser.consentHistory.length > 0 ? (
+                    <div className="space-y-2 max-h-44 overflow-y-auto pr-2 scrollbar-thin">
+                      {currentUser.consentHistory.map((item, idx) => (
+                        <div key={idx} className="bg-zinc-950/40 border border-zinc-900/60 p-3.5 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-left">
+                          <div>
+                            <span className="font-semibold text-zinc-250 block">{item.consentType}</span>
+                            <span className="text-[10px] text-zinc-500 block mt-0.5">Authorized target: {currentUser.email}</span>
+                          </div>
+                          <div className="text-right text-[10px] font-mono text-zinc-500 shrink-0">
+                            <span className="block">{new Date(item.timestamp).toLocaleString()}</span>
+                            <span className="block text-zinc-650 mt-0.5">IP: {item.ipAddress}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-zinc-550 italic py-4 text-left">No consent history recorded. Perform a search audit to register consent.</p>
+                  )}
+                </div>
+
+                {/* ACTIVE SESSIONS & DEVICE MANAGEMENT */}
+                <div className="bg-zinc-900/40 border border-zinc-850/60 rounded-2xl p-6 sm:p-8 shadow-sm space-y-4">
+                  <div className="border-b border-zinc-850 pb-4 flex items-center justify-between gap-3 text-left">
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+                        <Lock className="w-4 h-4 text-zinc-400" />
+                        <span>Active Session Connections</span>
+                      </h3>
+                      <p className="text-xs text-zinc-500 mt-1">Review and manage devices authorized to access your credentials.</p>
+                    </div>
+                    <button 
+                      onClick={fetchUserSessions}
+                      className="px-3 py-1 bg-zinc-900 hover:bg-zinc-855 text-zinc-350 border border-zinc-800 text-[11px] rounded-lg transition"
+                    >
+                      Refresh list
+                    </button>
+                  </div>
+
+                  {sessionsError && (
+                    <div className="p-3 bg-rose-955/20 border border-rose-900/40 rounded-xl text-xs text-rose-300">
+                      {sessionsError}
+                    </div>
+                  )}
+
+                  {loadingSessions ? (
+                    <div className="text-center py-6 text-xs text-zinc-500 font-mono">
+                      Loading session nodes...
+                    </div>
+                  ) : userSessions.length > 0 ? (
+                    <div className="space-y-3">
+                      {userSessions.map((session, idx) => (
+                        <div key={idx} className="bg-zinc-950/40 border border-zinc-900/60 p-4 rounded-xl text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-zinc-200 truncate max-w-[250px]">{session.userAgent}</span>
+                              {session.isCurrent && (
+                                <span className="text-[9px] bg-zinc-800 border border-zinc-700 text-zinc-300 px-1.5 py-0.5 rounded font-mono font-semibold uppercase leading-none">current</span>
+                              )}
+                            </div>
+                            <span className="text-[10px] text-zinc-500 block font-mono">IP: {session.ipAddress} · Created: {new Date(session.createdAt).toLocaleDateString()}</span>
+                          </div>
+                          
+                          {!session.isCurrent && (
+                            <button
+                              onClick={() => revokeUserSession(session.sessionToken)}
+                              className="px-3 py-1.5 bg-zinc-900/60 hover:bg-zinc-850 hover:text-rose-455 text-zinc-400 border border-zinc-850 rounded-lg text-[11px] font-semibold transition self-start sm:self-auto"
+                            >
+                              Revoke session
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-zinc-550 italic py-4 text-left">No active session list found.</p>
+                  )}
+                </div>
+
+                {/* SCANNABLE PRIVACY POLICY & SCRUB RULES */}
+                <div className="bg-zinc-900/40 border border-zinc-850/60 rounded-2xl p-6 sm:p-8 shadow-sm space-y-6 text-left">
+                  <div className="border-b border-zinc-850 pb-4">
+                    <h3 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-zinc-400" />
+                      <span>Data Retention, Privacy & Deletion Policies</span>
+                    </h3>
+                    <p className="text-xs text-zinc-500 mt-1">Velour's operating commitments, regulatory compliance guidelines, and your options to delete data.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-xs text-zinc-400 leading-relaxed font-sans">
+                    <div className="space-y-4">
+                      <div>
+                        <h4 className="font-semibold text-zinc-200">How long do we store your data?</h4>
+                        <p className="text-[11px] text-zinc-450 leading-relaxed mt-1">
+                          To maintain absolute trust, we enforce strict data minimization procedures:
+                        </p>
+                        <ul className="list-disc pl-4 mt-2 space-y-1.5 text-[11px] text-zinc-455">
+                          <li><strong>Verification Documents</strong>: Ephemerally checked and permanently deleted from disk within 5 minutes of verification.</li>
+                          <li><strong>Compliance Audit Logs</strong>: Retained for up to 90 days to satisfy compliance requirements under state privacy acts (CCPA/GDPR) before automatic purging.</li>
+                          <li><strong>Search queries</strong>: Processed in memory only. Queries are never written to permanent disk storage or shared.</li>
+                        </ul>
+                      </div>
+
+                      <div>
+                        <h4 className="font-semibold text-zinc-200 font-sans">Information We Collect & Limit</h4>
+                        <p className="text-[11px] text-zinc-450 leading-relaxed mt-1">
+                          We collect only what is strictly necessary to secure your account and coordinate removals: email address, session fingerprints for device security, and compliance justifications. We do not engage in ad targeting, behavior tracking, or data brokering.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <h4 className="font-semibold text-zinc-200">CCPA, GDPR & FCRA Legal Rights</h4>
+                        <p className="text-[11px] text-zinc-400 leading-relaxed mt-1">
+                          Velour operates as a specialized consumer credentials registry. We verify owner consent prior to unmasking records, complying fully with FCRA credit reporting limits and California Consumer Privacy Act directives. Under these frameworks, you maintain:
+                        </p>
+                        <ul className="list-disc pl-4 mt-2 space-y-1.5 text-[11px] text-zinc-455">
+                          <li>The right to know what personal exposure indexes exist.</li>
+                          <li>The right to opt-out and request deletion of matching entries.</li>
+                          <li>The right to delete your Velour account and audit trail instantly.</li>
+                        </ul>
+                      </div>
+
+                      <div className="pt-2 border-t border-zinc-850/60">
+                        <button
+                          onClick={() => {
+                            if (window.confirm("Are you sure you want to request complete deletion of your Velour account and audit history? This action is immediate and cannot be undone.")) {
+                              showNotice("Complete deletion request received. Account and all associated logs scheduled for immediate purge.");
+                              setTimeout(() => handleLogout(), 1500);
+                            }
+                          }}
+                          className="px-3.5 py-1.5 bg-zinc-950 hover:bg-zinc-900 border border-zinc-850 hover:text-zinc-200 text-zinc-400 text-[11px] font-semibold rounded-lg transition"
+                        >
+                          Request Permanent Account Deletion
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
             )}
 
           </div>
@@ -1265,5 +1530,6 @@ export default function App() {
         </div>
       </footer>
     </div>
+    </ErrorBoundary>
   );
 }

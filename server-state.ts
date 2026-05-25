@@ -66,6 +66,18 @@ export function logSecurityEvent(
   };
   db.auditLogs.unshift(newLog); // newer first
   saveDB(db);
+
+  // Write structured JSON log to disk for retention audit trails
+  try {
+    fs.appendFileSync(
+      path.join(process.cwd(), 'security-audit.log'),
+      JSON.stringify(newLog) + '\n',
+      'utf8'
+    );
+  } catch (err) {
+    console.error('Failed to append to security-audit.log', err);
+  }
+
   return newLog;
 }
 
@@ -78,6 +90,7 @@ function generatePreseededData(): DBState {
       id: 'usr_admin101',
       email: 'admin@velour.io',
       role: 'admin',
+      adminRole: 'super_admin',
       mfaEnabled: true,
       mfaBackupCode: 'BG-ADMIN-654876',
       isVerified: true,
@@ -85,6 +98,32 @@ function generatePreseededData(): DBState {
       subscriptionActive: true,
       createdIP: '127.0.0.1',
       registeredAt: new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString() // 90 days ago
+    },
+    {
+      id: 'usr_agent102',
+      email: 'agent@velour.io',
+      role: 'admin',
+      adminRole: 'support_agent',
+      mfaEnabled: true,
+      mfaBackupCode: 'BG-AGENT-112233',
+      isVerified: true,
+      subscriptionTier: 'pro',
+      subscriptionActive: true,
+      createdIP: '127.0.0.1',
+      registeredAt: new Date(now.getTime() - 45 * 24 * 60 * 60 * 1000).toISOString()
+    },
+    {
+      id: 'usr_officer103',
+      email: 'officer@breachguard.gov',
+      role: 'admin',
+      adminRole: 'compliance_officer',
+      mfaEnabled: true,
+      mfaBackupCode: 'BG-OFFICER-445566',
+      isVerified: true,
+      subscriptionTier: 'pro',
+      subscriptionActive: true,
+      createdIP: '127.0.0.1',
+      registeredAt: new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
     },
     {
       id: 'usr_demo',
@@ -319,8 +358,8 @@ function generatePreseededData(): DBState {
   const preseededEnterprise: EnterpriseClient[] = [
     {
       id: 'ent_1',
-      name: 'Stark Industries Group',
-      domain: 'starkindustries.com',
+      name: 'Acme Corporation Group',
+      domain: 'acme.com',
       totalSeats: 500,
       activeSeats: 489,
       slaStatus: 'operational',
@@ -329,8 +368,8 @@ function generatePreseededData(): DBState {
     },
     {
       id: 'ent_2',
-      name: 'Wayne Enterprises Tech',
-      domain: 'wayne-corp.net',
+      name: 'Vanguard Tech Solutions',
+      domain: 'vanguard-tech.net',
       totalSeats: 1200,
       activeSeats: 1195,
       slaStatus: 'operational',
@@ -339,8 +378,8 @@ function generatePreseededData(): DBState {
     },
     {
       id: 'ent_3',
-      name: 'Omni Consumer Products (OCP)',
-      domain: 'ocp-detroit.com',
+      name: 'Lexington Operations',
+      domain: 'lexington-ops.com',
       totalSeats: 300,
       activeSeats: 298,
       slaStatus: 'at_risk',
