@@ -1,0 +1,11 @@
+node_modules
+dist
+build
+.cache
+.env
+*.log
+*.pdf
+*.zip
+coverage
+tmp
+.DS_Store

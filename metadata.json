@@ -1,0 +1,6 @@
+{
+  "name": "Velour",
+  "description": "A full-stack privacy exposure intelligence platform that helps verified users discover, monitor, and understand their publicly exposed personal data across breach databases, OSINT sources, and identity risk feeds.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
