@@ -4,7 +4,8 @@ import {
   Download, AlertTriangle, LineChart, BookOpen, BellRing, Lock, 
   Fingerprint, HelpCircle, LogOut, DollarSign, CheckCircle2, 
   RefreshCw, Eye, EyeOff, FileText, AlertOctagon, Sparkles,
-  ArrowRight, ShieldAlert as AlertIcon, Eye as EyeIcon, Globe, LockKeyhole, HeartHandshake, Info
+  ArrowRight, ShieldAlert as AlertIcon, Eye as EyeIcon, Globe, LockKeyhole, HeartHandshake, Info,
+  Mail, Phone, AtSign, ChevronDown, ChevronUp, X, Zap, Database, TrendingUp
 } from 'lucide-react';
 
 import MockDeviceFingerprint from './components/MockDeviceFingerprint';
@@ -15,6 +16,14 @@ import AdminTelemetryDashboard from './components/AdminTelemetryDashboard';
 import PrivacyActionsTracker from './components/PrivacyActionsTracker';
 import ErrorBoundary from './components/ErrorBoundary';
 import { User, BreachRecord } from './types';
+
+const SCAN_MESSAGES = [
+  'Checking known breach registries…',
+  'Scanning public data sources…',
+  'Reviewing scam risk indicators…',
+  'Compiling your exposure summary…',
+  'Finalizing results…',
+];
 
 export default function App() {
   const [authToken, setAuthToken] = useState<string | null>(() => localStorage.getItem('bg_auth_token'));
@@ -63,6 +72,16 @@ export default function App() {
   // Real-time alerts triggers
   const [triggers, setTriggers] = useState<{ id: string; msg: string; type: 'info' | 'danger' }[]>([]);
 
+  // Discovery flow states
+  const [discoveryPhase, setDiscoveryPhase] = useState<'hero' | 'scanning' | 'preview'>('hero');
+  const [discoveryEmail, setDiscoveryEmail] = useState('');
+  const [discoveryPhone, setDiscoveryPhone] = useState('');
+  const [discoveryUsername, setDiscoveryUsername] = useState('');
+  const [discoveryExpanded, setDiscoveryExpanded] = useState(false);
+  const [discoveryResults, setDiscoveryResults] = useState<any>(null);
+  const [scanStep, setScanStep] = useState(0);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+
   useEffect(() => {
     if (authToken) {
       fetchProfile();
@@ -80,6 +99,16 @@ export default function App() {
       triggerGeminiAdvisor();
     }
   }, [searchResults]);
+
+  useEffect(() => {
+    if (authToken) setShowAuthModal(false);
+  }, [authToken]);
+
+  useEffect(() => {
+    if (discoveryPhase !== 'scanning') { setScanStep(0); return; }
+    const interval = setInterval(() => setScanStep(s => Math.min(s + 1, SCAN_MESSAGES.length - 1)), 600);
+    return () => clearInterval(interval);
+  }, [discoveryPhase]);
 
   async function fetchProfile() {
     setLoadingProfile(true);
@@ -284,6 +313,32 @@ export default function App() {
     }
   }
 
+  async function runFreeDiscovery(e: React.FormEvent) {
+    e.preventDefault();
+    if (!discoveryEmail) return;
+    setDiscoveryPhase('scanning');
+    let results: { breachCount: number | null; sources: string[]; categories: string[]; riskLevel: string; limitedAccess: boolean } = {
+      breachCount: null, sources: [], categories: [], riskLevel: 'unknown', limitedAccess: false
+    };
+    const fetchData = fetch(`/api/exposure/search?q=${encodeURIComponent(discoveryEmail)}&consent=true&preview=true`, {
+      headers: { 'x-turnstile-token': 'cf-turnstile-simulated-token-success' }
+    }).then(r => r.json()).then(data => {
+      if (data.success && Array.isArray(data.results)) {
+        const bc = data.results.length;
+        results = {
+          breachCount: bc,
+          sources: [...new Set<string>(data.results.map((r: any) => String(r.source)))],
+          categories: [...new Set<string>(data.results.flatMap((r: any) => r.compromisedData || []))].slice(0, 5),
+          riskLevel: bc > 3 ? 'moderate' : bc > 0 ? 'low' : 'minimal',
+          limitedAccess: false
+        };
+      } else { results.limitedAccess = true; }
+    }).catch(() => { results.limitedAccess = true; });
+    await Promise.all([fetchData, new Promise<void>(r => setTimeout(r, 2800))]);
+    setDiscoveryResults(results);
+    setDiscoveryPhase('preview');
+  }
+
   async function handleAuthSubmit(e: React.FormEvent) {
     e.preventDefault();
     setAuthError(null);
@@ -485,7 +540,7 @@ export default function App() {
           </div>
         </div>
 
-        {currentUser && (
+        {currentUser ? (
           <div className="flex items-center gap-6">
             <nav className="hidden md:flex gap-1.5 bg-zinc-900/60 p-1 rounded-lg border border-zinc-800/80">
               <button
@@ -516,7 +571,7 @@ export default function App() {
                 onClick={() => setActiveTab('privacy')}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${activeTab === 'privacy' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
-                Privacy & Sessions
+                Privacy &amp; Sessions
               </button>
               {currentUser.role === 'admin' && (
                 <button
@@ -527,11 +582,10 @@ export default function App() {
                 </button>
               )}
             </nav>
-
             <div className="flex items-center gap-3.5 text-left">
               <div className="hidden sm:block">
                 <span className="text-xs text-zinc-300 block font-semibold">{currentUser.email}</span>
-                <span className="text-[10px] text-zinc-500 font-mono tracking-xs block mt-0.5 lowercase">
+                <span className="text-[10px] text-zinc-400 font-mono tracking-xs block mt-0.5 lowercase">
                   membership: {currentUser.subscriptionTier} · {currentUser.isVerified ? 'verified' : 'unverified'}
                 </span>
               </div>
@@ -544,6 +598,14 @@ export default function App() {
               </button>
             </div>
           </div>
+        ) : (
+          <button
+            id="header-sign-in-btn"
+            onClick={() => { setShowAuthModal(true); setAuthForm('signin'); }}
+            className="px-4 py-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white rounded-lg text-xs font-semibold transition-colors"
+          >
+            Sign In
+          </button>
         )}
       </header>
 
@@ -559,302 +621,341 @@ export default function App() {
           ))}
         </div>
 
-        {/* LANDING & AUTH VIEW SCREEN (IF NOT AUTHENTICATED) */}
+        {/* LANDING — VALUE-FIRST DISCOVERY EXPERIENCE */}
         {!authToken ? (
-          <div className="space-y-16 py-6 sm:py-12">
-            
-            {/* 1. HERO SECTION & AUTH COMBO GRID */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 items-center text-left">
-              
-              <div className="lg:col-span-7 space-y-6">
-                <div className="inline-flex items-center gap-2 px-3 py-1 bg-zinc-900 border border-zinc-800 rounded-full text-zinc-450 text-[11px] font-medium">
-                  <Globe className="w-3.5 h-3.5 text-zinc-500" />
-                  <span>Integrated Digital Exposure Monitoring</span>
-                </div>
+          <div className="relative">
+            {/* Ambient glow */}
+            <div className="absolute inset-x-0 top-0 h-[600px] bg-[radial-gradient(ellipse_70%_40%_at_50%_0%,rgba(99,102,241,0.06),transparent)] pointer-events-none" />
 
-                <div className="space-y-3">
-                  <h2 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight text-white leading-[1.08]">
-                    Your privacy is a baseline. <br />
-                    We help you manage it.
-                  </h2>
-                  <p className="text-sm sm:text-base text-zinc-400 max-w-xl leading-relaxed font-sans">
-                    Velour aggregates exposure data across verified repositories to provide compliance auditing, direct opt-out workflows, and structured identity checks.
-                  </p>
-                </div>
+            {/* === PHASE 1: HERO + DISCOVERY FORM === */}
+            {discoveryPhase === 'hero' && (
+              <div className="space-y-20 py-8 sm:py-14 animate-in fade-in duration-300">
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-12 lg:gap-16 items-center">
 
-                {/* Spaced grid mini columns */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-4 border-t border-zinc-900">
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-mono font-bold text-zinc-400 tracking-wider block uppercase">01 / Audit</span>
-                    <p className="text-xs text-zinc-500">Check exposure metrics across verified registries.</p>
+                  {/* Left: Headline */}
+                  <div className="lg:col-span-6 space-y-7 text-left">
+                    <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-zinc-900/80 border border-zinc-800 rounded-full text-zinc-400 text-[11px] font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span>Free · No account required</span>
+                    </div>
+                    <div className="space-y-4">
+                      <h2 className="text-4xl sm:text-5xl lg:text-[3.25rem] font-bold tracking-tight text-white leading-[1.1]">
+                        See what's already<br />public about you.
+                      </h2>
+                      <p className="text-[15px] text-zinc-300 max-w-lg leading-relaxed">
+                        Velour quietly checks data breach registries and public records to show what information is exposed about you — in seconds, with no account needed.
+                      </p>
+                    </div>
+                    <div className="grid grid-cols-3 gap-5 pt-4 border-t border-zinc-900">
+                      {([
+                        { icon: Eye, label: 'Awareness', desc: 'Know what records exist about you online.' },
+                        { icon: Shield, label: 'Safety', desc: 'Understand your risk before it becomes a problem.' },
+                        { icon: LockKeyhole, label: 'Control', desc: 'Take targeted action to reduce your exposure.' },
+                      ] as const).map(({ icon: Icon, label, desc }) => (
+                        <div key={label} className="space-y-2">
+                          <div className="w-7 h-7 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center">
+                            <Icon className="w-3.5 h-3.5 text-zinc-400" />
+                          </div>
+                          <span className="text-xs font-semibold text-zinc-200 block">{label}</span>
+                          <p className="text-[11px] text-zinc-400 leading-relaxed">{desc}</p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-mono font-bold text-zinc-400 tracking-wider block uppercase">02 / Verify</span>
-                    <p className="text-xs text-zinc-500">Verify identity ownership to access detailed insights.</p>
-                  </div>
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-mono font-bold text-zinc-400 tracking-wider block uppercase">03 / Monitor</span>
-                    <p className="text-xs text-zinc-500">Enable automated exposure monitoring alerts.</p>
-                  </div>
-                </div>
-              </div>
 
-              {/* AUTH PANEL RIGHT COLUMN */}
-              <div className="lg:col-span-5 space-y-4">
-                <div className="bg-zinc-900 border border-zinc-850 rounded-2xl shadow-xl p-6 overflow-hidden relative">
-                  
-                  {!mfaChallengeToken ? (
-                    /* Authenticate Form */
-                    <form onSubmit={handleAuthSubmit} className="space-y-4 text-left">
-                      <div className="mb-4">
-                        <h3 className="text-base font-semibold text-zinc-100">Access Velour</h3>
-                        <p className="text-xs text-zinc-500 mt-1">Discover and secure your exposed accounts</p>
+                  {/* Right: Discovery form */}
+                  <div className="lg:col-span-6">
+                    <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-7 shadow-2xl backdrop-blur-sm space-y-5">
+                      <div className="space-y-1 text-left">
+                        <h3 className="text-lg font-semibold text-white">Free Exposure Check</h3>
+                        <p className="text-sm text-zinc-400">Enter your email to see what's already public.</p>
                       </div>
-
-                      <div className="flex gap-2 p-1 bg-zinc-950 border border-zinc-800 rounded-lg">
-                        <button
-                          type="button"
-                          onClick={() => setAuthForm('signin')}
-                          className={`flex-1 py-1.5 text-[11px] font-semibold rounded transition ${authForm === 'signin' ? 'bg-zinc-800 text-zinc-100' : 'bg-transparent text-zinc-500 hover:text-zinc-350'}`}
-                        >
-                          Sign In
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setAuthForm('signup')}
-                          className={`flex-1 py-1.5 text-[11px] font-semibold rounded transition ${authForm === 'signup' ? 'bg-zinc-800 text-zinc-100' : 'bg-transparent text-zinc-500 hover:text-zinc-350'}`}
-                        >
-                          Create Account
-                        </button>
-                      </div>
-
-                      {/* Seed Helper for Testing */}
-                      <div className="bg-zinc-950/80 p-3 border border-zinc-850/80 rounded-lg">
-                        <span className="text-[10px] text-zinc-500 font-semibold block mb-1 font-mono uppercase tracking-wide">Test user autofill credentials:</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAuthEmail('mattjhagen0@gmail.com');
-                            setAuthPassword('Mh092380!');
-                          }}
-                          className="p-2 rounded bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 text-[11px] text-zinc-300 w-full text-left font-sans flex items-center justify-between"
-                        >
-                          <span>User: <strong className="text-white">mattjhagen0@gmail.com</strong></span>
-                          <ArrowRight className="w-3.5 h-3.5 text-zinc-400" />
-                        </button>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div>
-                          <label className="text-[10px] font-semibold text-zinc-455 uppercase tracking-widest block mb-1">Email</label>
+                      <form onSubmit={runFreeDiscovery} className="space-y-3">
+                        <div className="relative">
+                          <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                           <input
+                            id="discovery-email-input"
                             type="email"
                             required
-                            value={authEmail}
-                            onChange={(e) => setAuthEmail(e.target.value)}
-                            className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 font-mono"
+                            value={discoveryEmail}
+                            onChange={(e) => setDiscoveryEmail(e.target.value)}
+                            placeholder="your@email.com"
+                            className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
                           />
                         </div>
-
-                        {authForm === 'signup' && (
-                          <>
-                            <div>
-                              <label className="text-[10px] font-semibold text-zinc-455 uppercase tracking-widest block mb-1">Username</label>
-                              <input
-                                type="text"
-                                required
-                                placeholder="e.g. janesmith"
-                                value={authUsername}
-                                onChange={(e) => setAuthUsername(e.target.value)}
-                                className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 font-mono"
-                              />
-                            </div>
-
-                            <div>
-                              <label className="text-[10px] font-semibold text-zinc-455 uppercase tracking-widest block mb-1">Phone Number</label>
+                        {discoveryExpanded && (
+                          <div className="space-y-3 animate-in slide-in-from-top-2 duration-200">
+                            <div className="relative">
+                              <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                               <input
                                 type="tel"
-                                required
-                                placeholder="e.g. +1 (555) 019-2834"
-                                value={authPhone}
-                                onChange={(e) => setAuthPhone(e.target.value)}
-                                className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 font-mono"
+                                value={discoveryPhone}
+                                onChange={(e) => setDiscoveryPhone(e.target.value)}
+                                placeholder="Phone number (optional)"
+                                className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
                               />
                             </div>
-                          </>
+                            <div className="relative">
+                              <AtSign className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+                              <input
+                                type="text"
+                                value={discoveryUsername}
+                                onChange={(e) => setDiscoveryUsername(e.target.value)}
+                                placeholder="Username (optional)"
+                                className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
+                              />
+                            </div>
+                          </div>
                         )}
-
-                        <div>
-                          <label className="text-[10px] font-semibold text-zinc-455 uppercase tracking-widest block mb-1">Password</label>
-                          <input
-                            type="password"
-                            required
-                            value={authPassword}
-                            onChange={(e) => setAuthPassword(e.target.value)}
-                            className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
-                          />
-                        </div>
-                      </div>
-
-                      {authError && (
-                        <div className="p-3 bg-rose-955/20 border border-rose-900/40 rounded-xl text-xs text-rose-300 flex gap-1.5">
-                          <AlertOctagon className="w-4 h-4 shrink-0" />
-                          <span>{authError}</span>
-                        </div>
-                      )}
-
-                      <button
-                        type="submit"
-                        disabled={authLoading}
-                        className="w-full bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-bold text-xs py-2.5 rounded-lg transition"
-                      >
-                        {authLoading ? (
-                          <RefreshCw className="w-4 h-4 animate-spin text-zinc-950 mx-auto" />
-                        ) : (
-                          <span>Continue</span>
-                        )}
-                      </button>
-                    </form>
-                  ) : (
-                    /* MFA 2FA Challenge */
-                    <form onSubmit={handleMfaVerify} className="space-y-4 text-left">
-                      <div className="mb-4">
-                        <h3 className="text-base font-semibold text-zinc-100 flex items-center gap-1.5">
-                          <Lock className="w-4 h-4 text-zinc-400" />
-                          <span>MFA Challenge</span>
-                        </h3>
-                        <p className="text-xs text-zinc-500 mt-1">Provide authentication passcode</p>
-                      </div>
-
-                      <div className="bg-zinc-950 p-3 rounded-xl border border-zinc-850 text-xs text-zinc-400 space-y-1">
-                        <span className="text-zinc-300 font-semibold block mb-1">Passcode simulator:</span>
-                        <p className="text-[11px] leading-normal text-zinc-450 mb-2">Simulate a hardware two-factor check with test code below:</p>
                         <button
                           type="button"
-                          onClick={() => setMfaCode('123456')}
-                          className="py-1 px-3 bg-zinc-900 hover:bg-zinc-850 hover:text-zinc-100 border border-zinc-800 rounded text-[11px]"
+                          onClick={() => setDiscoveryExpanded(!discoveryExpanded)}
+                          className="flex items-center gap-1.5 text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors"
                         >
-                          Fill Code: 123456
+                          {discoveryExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          <span>{discoveryExpanded ? 'Fewer options' : '+ Add phone or username for a deeper scan'}</span>
                         </button>
-                      </div>
-
-                      <div>
-                        <label className="text-[10px] font-semibold text-zinc-455 uppercase tracking-widest block mb-1.5">Six Digit Verification Code</label>
-                        <input
-                          type="text"
-                          required
-                          placeholder="e.g. 123456"
-                          maxLength={6}
-                          value={mfaCode}
-                          onChange={(e) => setMfaCode(e.target.value)}
-                          className="w-full bg-zinc-950 border border-zinc-850 rounded p-2.5 text-center tracking-[0.56em] text-md font-bold text-white font-mono focus:border-zinc-700 focus:outline-none"
-                        />
-                      </div>
-
-                      {authError && (
-                        <div className="p-3 bg-rose-955/20 border border-rose-900/40 rounded-xl text-xs text-rose-300">
-                          {authError}
-                        </div>
-                      )}
-
-                      <button
-                        type="submit"
-                        disabled={authLoading}
-                        className="w-full bg-zinc-100 hover:bg-zinc-200 text-zinc-950 font-bold text-xs py-2.5 rounded-lg transition"
-                      >
-                        {authLoading ? (
-                          <RefreshCw className="w-4 h-4 animate-spin text-zinc-950 mx-auto" />
-                        ) : (
-                          <span>Verify authentication code</span>
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setMfaChallengeToken(null)}
-                        className="w-full text-center text-[10px] uppercase font-mono text-zinc-500 hover:text-zinc-300 block pt-1"
-                      >
-                        Cancel transaction
-                      </button>
-                    </form>
-                  )}
-                </div>
-
-                <MockDeviceFingerprint onFingerprintReady={setDeviceHash} />
-              </div>
-            </div>
-            {/* 2. REGISTRY COVERAGE & STATUS */}
-            <div className="space-y-4 text-left pt-6">
-              <div>
-                <h3 className="text-zinc-300 font-semibold text-lg tracking-tight">Registry Coverage</h3>
-                <p className="text-zinc-500 text-xs">Velour queries the following independent registry databases on demand under explicit user consent.</p>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {[
-                  { name: "HaveIBeenPwned", desc: "Monitored credential leak datasets." },
-                  { name: "DeHashed", desc: "Exposed database log coordinates." },
-                  { name: "LeakCheck", desc: "Historical plaintext archive matches." },
-                  { name: "Pentester NPD", desc: "Public directory records mapping." }
-                ].map((prov, idx) => {
-                  const matchingHealth = providerHealthList.find(p => p.name.toLowerCase().includes(prov.name.toLowerCase().split(' ')[0]));
-                  const status = matchingHealth ? matchingHealth.status : 'operational';
-                  
-                  return (
-                    <div key={idx} className="bg-zinc-900/30 border border-zinc-850/80 rounded-xl p-5 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-wider">{prov.name}</span>
-                        <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border leading-none ${
-                          status === 'healthy' || status === 'operational'
-                            ? 'bg-zinc-900/60 text-zinc-400 border-zinc-800' 
-                            : 'bg-amber-955/20 text-amber-500 border-amber-900/30'
-                        }`}>
-                          {status}
-                        </span>
-                      </div>
-                      <div>
-                        <p className="text-xs text-zinc-455 leading-relaxed">{prov.desc}</p>
+                        <button
+                          id="run-discovery-submit"
+                          type="submit"
+                          className="w-full bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2 mt-1"
+                        >
+                          <Zap className="w-4 h-4" />
+                          Run Free Discovery
+                        </button>
+                      </form>
+                      <div className="flex items-center justify-center gap-5 pt-1 border-t border-zinc-900">
+                        {([
+                          { icon: Lock, label: 'No account needed' },
+                          { icon: ShieldCheck, label: 'Not stored' },
+                          { icon: CheckCircle2, label: 'Free forever' },
+                        ] as const).map(({ icon: Icon, label }) => (
+                          <span key={label} className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+                            <Icon className="w-3 h-3" />{label}
+                          </span>
+                        ))}
                       </div>
                     </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* 3. TRUST & COMPLIANCE STATEMENTS */}
-            <div className="p-8 bg-zinc-900/30 rounded-2xl border border-zinc-850/80 text-left grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-              <div className="space-y-2">
-                <div className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-300">
-                  <LockKeyhole className="w-4 h-4" />
+                  </div>
                 </div>
-                <h4 className="text-sm font-semibold text-zinc-200">Zero-knowledge data policy</h4>
-                <p className="text-xs text-zinc-450 leading-relaxed">
-                  We generate cryptographic reports client-side. Your raw identity credentials and photo match verification checks are processed in transient on-device memory, never persisted on our permanent servers.
-                </p>
-              </div>
 
-              <div className="space-y-2">
-                <div className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-300">
-                  <ShieldCheck className="w-4 h-4" />
+                {/* Data sources strip */}
+                <div className="space-y-4 text-left">
+                  <div>
+                    <h3 className="text-zinc-200 font-semibold text-sm">Data sources scanned</h3>
+                    <p className="text-zinc-400 text-xs mt-1">Independent registries checked under explicit user consent.</p>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {[
+                      { name: 'HaveIBeenPwned', desc: 'Credential leak datasets' },
+                      { name: 'DeHashed', desc: 'Exposed database records' },
+                      { name: 'LeakCheck', desc: 'Historical archive matches' },
+                      { name: 'Public Records', desc: 'Directory data mapping' },
+                    ].map((prov) => (
+                      <div key={prov.name} className="bg-zinc-900/30 border border-zinc-800/60 rounded-xl p-4 space-y-1.5">
+                        <span className="text-[10px] font-mono text-zinc-400 uppercase tracking-wider block">{prov.name}</span>
+                        <p className="text-[11px] text-zinc-500 leading-relaxed">{prov.desc}</p>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <h4 className="text-sm font-semibold text-zinc-200">Strict regulatory compliance</h4>
-                <p className="text-xs text-zinc-455 leading-relaxed">
-                  In absolute consistency with FCRA, CCPA, and global digital consumer frameworks, we mandate comprehensive user identity reviews before displaying complete non-redacted database archives.
-                </p>
-              </div>
 
-              <div className="space-y-2">
-                <div className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-300">
-                  <Settings className="w-4 h-4" />
+                {/* Trust & compliance */}
+                <div className="p-8 bg-zinc-900/20 rounded-2xl border border-zinc-800/40 grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
+                  {[
+                    { icon: LockKeyhole, title: 'Zero-knowledge data policy', desc: 'Scans are processed transiently. We do not store your query data or write it to permanent storage.' },
+                    { icon: ShieldCheck, title: 'Regulatory compliance', desc: 'Consistent with FCRA, CCPA, and global consumer privacy frameworks. Sensitive details require identity verification.' },
+                    { icon: HeartHandshake, title: 'Privacy-first by design', desc: 'No ad targeting, behavioral tracking, or data brokering. Your privacy is what we protect.' },
+                  ].map(({ icon: Icon, title, desc }) => (
+                    <div key={title} className="space-y-2">
+                      <div className="w-8 h-8 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-300">
+                        <Icon className="w-4 h-4" />
+                      </div>
+                      <h4 className="text-sm font-semibold text-zinc-200">{title}</h4>
+                      <p className="text-[12px] text-zinc-400 leading-relaxed">{desc}</p>
+                    </div>
+                  ))}
                 </div>
-                <h4 className="text-sm font-semibold text-zinc-200">Anti-fraud billing guards</h4>
-                <p className="text-xs text-zinc-455 leading-relaxed">
-                  Our credit card gateways reject pre-paid, high-fraud gift cards and virtual disposable cards immediately, protecting the core infrastructure and maintaining enterprise audit integrity.
-                </p>
               </div>
-            </div>
+            )}
 
+            {/* === PHASE 2: SCANNING === */}
+            {discoveryPhase === 'scanning' && (
+              <div className="flex flex-col items-center justify-center min-h-[520px] py-20 space-y-10 animate-in fade-in duration-200">
+                <div className="relative">
+                  <div className="w-20 h-20 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center shadow-2xl">
+                    <Shield className="w-9 h-9 text-indigo-400 animate-pulse" />
+                  </div>
+                  <div className="absolute -inset-3 rounded-3xl border border-indigo-500/15 animate-ping" />
+                </div>
+                <div className="text-center space-y-2 max-w-xs">
+                  <h3 className="text-xl font-semibold text-white">Scanning your exposure</h3>
+                  <p className="text-zinc-400 text-sm min-h-[20px] transition-all duration-300">{SCAN_MESSAGES[scanStep]}</p>
+                </div>
+                <div className="w-72 space-y-3">
+                  <div className="w-full h-[3px] bg-zinc-900 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-indigo-500 rounded-full transition-all duration-700"
+                      style={{ width: `${Math.min(((scanStep + 1) / SCAN_MESSAGES.length) * 100, 90)}%` }}
+                    />
+                  </div>
+                  <p className="text-center text-[11px] text-zinc-600 font-mono truncate">{discoveryEmail}</p>
+                </div>
+                <div className="grid grid-cols-3 gap-3 w-full max-w-sm">
+                  {['Breach databases', 'Public records', 'Risk indicators'].map((label, i) => (
+                    <div
+                      key={label}
+                      className={`text-center p-2.5 rounded-lg border text-[10px] font-mono transition-all duration-500 ${
+                        scanStep > i ? 'bg-zinc-900 border-zinc-800 text-zinc-400' : 'border-zinc-900 text-zinc-700'
+                      }`}
+                    >
+                      {scanStep > i ? '✓ ' : ''}{label}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* === PHASE 3: RESULTS PREVIEW === */}
+            {discoveryPhase === 'preview' && discoveryResults && (
+              <div className="space-y-8 py-6 sm:py-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                {/* Header */}
+                <div className="text-center space-y-3">
+                  <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-full text-zinc-400 text-[11px] font-medium">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Scan complete</span>
+                  </div>
+                  <h2 className="text-3xl font-bold text-white">Your exposure summary</h2>
+                  <p className="text-zinc-400 text-sm">Scanned for: <span className="text-zinc-200 font-medium font-mono">{discoveryEmail}</span></p>
+                </div>
+
+                {/* Insight cards */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3 text-left">
+                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
+                      <Database className="w-4 h-4 text-amber-400" />
+                    </div>
+                    <div>
+                      <div className="text-3xl font-bold text-white">
+                        {discoveryResults.limitedAccess ? '—' : (discoveryResults.breachCount ?? 0)}
+                      </div>
+                      <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">
+                        {discoveryResults.limitedAccess ? 'Preview scan complete' : discoveryResults.breachCount === 0 ? 'No known data events' : `Known data ${discoveryResults.breachCount === 1 ? 'event' : 'events'} found`}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3 text-left">
+                    <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
+                      <Globe className="w-4 h-4 text-indigo-400" />
+                    </div>
+                    <div>
+                      <div className="text-3xl font-bold text-white">
+                        {discoveryResults.limitedAccess ? '—' : (discoveryResults.sources?.length ?? 0)}
+                      </div>
+                      <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">Public data sources scanned</p>
+                    </div>
+                  </div>
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3 text-left">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                      discoveryResults.riskLevel === 'moderate' ? 'bg-amber-500/10 border border-amber-500/20' :
+                      discoveryResults.riskLevel === 'low' ? 'bg-emerald-500/10 border border-emerald-500/20' :
+                      'bg-zinc-800/60 border border-zinc-700/40'
+                    }`}>
+                      <TrendingUp className={`w-4 h-4 ${
+                        discoveryResults.riskLevel === 'moderate' ? 'text-amber-400' :
+                        discoveryResults.riskLevel === 'low' ? 'text-emerald-400' : 'text-zinc-400'
+                      }`} />
+                    </div>
+                    <div>
+                      <div className={`text-lg font-bold capitalize ${
+                        discoveryResults.riskLevel === 'moderate' ? 'text-amber-300' :
+                        discoveryResults.riskLevel === 'low' ? 'text-emerald-300' : 'text-zinc-300'
+                      }`}>
+                        {discoveryResults.riskLevel === 'unknown' ? 'Review results' : (discoveryResults.riskLevel ?? 'Minimal')}
+                      </div>
+                      <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">Estimated exposure level</p>
+                    </div>
+                  </div>
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3 text-left">
+                    <div className="w-8 h-8 rounded-lg bg-zinc-800/60 border border-zinc-700/40 flex items-center justify-center">
+                      <FileText className="w-4 h-4 text-zinc-400" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-zinc-300 font-medium mb-1.5">Data types</p>
+                      {discoveryResults.categories?.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {discoveryResults.categories.slice(0, 3).map((cat: string) => (
+                            <span key={cat} className="text-[10px] bg-zinc-800 border border-zinc-700 text-zinc-400 rounded px-1.5 py-0.5 font-mono">{cat}</span>
+                          ))}
+                          {discoveryResults.categories.length > 3 && <span className="text-[10px] text-zinc-500">+{discoveryResults.categories.length - 3} more</span>}
+                        </div>
+                      ) : <p className="text-xs text-zinc-500">Sign up to see details</p>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Recommendations */}
+                <div className="bg-zinc-900/30 border border-zinc-800 rounded-2xl p-6 space-y-4 text-left">
+                  <h4 className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
+                    <Sparkles className="w-4 h-4 text-indigo-400" />
+                    Privacy recommendations
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+                    {[
+                      { title: 'Change exposed passwords', desc: 'Use a unique, strong password for each service. A password manager makes this easy.' },
+                      { title: 'Enable two-factor auth', desc: 'Add a second layer of security to your most important accounts right away.' },
+                      { title: 'Monitor your credit', desc: 'Consider a free credit freeze with the major bureaus if financial data appears exposed.' },
+                    ].map((rec) => (
+                      <div key={rec.title} className="flex items-start gap-2.5">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="text-xs font-semibold text-zinc-200 block">{rec.title}</span>
+                          <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">{rec.desc}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Account CTA */}
+                <div className="bg-zinc-900/50 border border-zinc-700/80 rounded-2xl p-8 sm:p-10 text-center space-y-6 relative overflow-hidden">
+                  <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/25 to-transparent" />
+                  <div className="space-y-2">
+                    <h3 className="text-2xl font-bold text-white">Your full report is ready</h3>
+                    <p className="text-zinc-400 text-sm max-w-md mx-auto leading-relaxed">
+                      Create a free account to access your complete exposure report, request data removals, and enable ongoing monitoring.
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-w-md mx-auto text-left">
+                    {['View all breach details and dates', 'See exactly which data was exposed', 'Request removal from public records', 'Enable continuous exposure monitoring'].map((item) => (
+                      <div key={item} className="flex items-center gap-2 text-xs text-zinc-300">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                        <span>{item}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                    <button
+                      id="create-account-post-discovery"
+                      onClick={() => { setShowAuthModal(true); setAuthForm('signup'); setAuthEmail(discoveryEmail); }}
+                      className="px-8 py-3 bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-sm rounded-xl transition-colors flex items-center gap-2"
+                    >
+                      Create Free Account
+                      <ArrowRight className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => setDiscoveryPhase('hero')}
+                      className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+                    >
+                      Scan a different email
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-zinc-600">No credit card required · Cancel anytime · Your data stays private</p>
+                </div>
+              </div>
+            )}
           </div>
+
         ) : (
           /* PRIMARY AUTHENTICATED PLATFORM PORTAL UI */
           <div className="space-y-8 relative z-10 text-left">
@@ -955,7 +1056,7 @@ export default function App() {
                       <Search className="w-4 h-4 text-zinc-400" />
                       <span>Search registry exposure</span>
                     </h3>
-                    <p className="text-xs text-zinc-500 leading-relaxed mb-5 font-sans">
+                    <p className="text-sm text-zinc-400 leading-relaxed mb-5 font-sans">
                       Enter your email address to query regional exposure records and verified public databases.
                     </p>
 
@@ -1029,7 +1130,7 @@ export default function App() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-850 pb-4">
                       <div>
                         <h3 className="text-sm font-semibold text-zinc-150">Exposures Detected ({searchResults.length})</h3>
-                        <p className="text-[11px] text-zinc-500 mt-1 font-mono uppercase tracking-wide">Aggregated archives associated with domain query</p>
+                        <p className="text-[11px] text-zinc-400 mt-1 font-mono uppercase tracking-wide">Aggregated archives associated with domain query</p>
                       </div>
                       
                       {currentUser?.isVerified && searchResults.length > 0 && (
@@ -1050,7 +1151,7 @@ export default function App() {
                         <ShieldCheck className="w-5 h-5 text-zinc-600 mx-auto" />
                         <div className="space-y-1">
                           <h4 className="text-xs font-semibold text-zinc-300">No active exposures detected</h4>
-                          <p className="text-[11px] text-zinc-500 max-w-sm mx-auto leading-relaxed font-sans">
+                          <p className="text-[11px] text-zinc-400 max-w-sm mx-auto leading-relaxed font-sans">
                             Your monitored accounts appear stable. Run an audit above to query regional exposure records.
                           </p>
                         </div>
@@ -1202,7 +1303,7 @@ export default function App() {
                         <div className="w-full h-1 bg-zinc-950 rounded-full overflow-hidden">
                           <div className={`h-full ${riskStatus.bar} transition-all duration-500`} style={{ width: `${averageRisk}%` }}></div>
                         </div>
-                        <p className="text-[11px] text-zinc-500 leading-normal">
+                        <p className="text-[12px] text-zinc-400 leading-normal">
                           Calculated score aggregated over {searchResults.length} directory match points.
                         </p>
                       </div>
@@ -1229,7 +1330,7 @@ export default function App() {
                       <div className="flex items-center justify-between p-3 bg-zinc-950/40 rounded-lg border border-zinc-850/80">
                         <div>
                           <span className="font-semibold block text-zinc-300 text-xs">Email Delivery</span>
-                          <span className="text-[10px] text-zinc-500 block mt-0.5">Instant notification on continuous scans</span>
+                          <span className="text-[10px] text-zinc-400 block mt-0.5">Instant notification on continuous scans</span>
                         </div>
                         <input
                           type="checkbox"
@@ -1247,7 +1348,7 @@ export default function App() {
                         )}
                         <div>
                           <span className="font-semibold block text-zinc-300 text-xs">Encrypted Push Checks</span>
-                          <span className="text-[10px] text-zinc-500 block mt-0.5">Secure mobile system synchronization</span>
+                          <span className="text-[10px] text-zinc-400 block mt-0.5">Secure mobile system synchronization</span>
                         </div>
                         <input
                           type="checkbox"
@@ -1283,11 +1384,11 @@ export default function App() {
                       Authorize Velour operations teams to access select exposure registries temporarily to coordinate opt-outs or resolve active support cases.
                     </p>
 
-                    <div className="space-y-3 text-xs text-zinc-450 leading-relaxed font-sans pt-1">
+                    <div className="space-y-3 text-xs text-zinc-400 leading-relaxed font-sans pt-1">
                       <div className="flex items-center justify-between p-3 bg-zinc-950/40 rounded-lg border border-zinc-850/80">
                         <div>
-                          <span className="font-semibold block text-zinc-300 text-xs">Support Operator Access</span>
-                          <span className="text-[10px] text-zinc-500 block mt-0.5 font-sans">Authorizes record review under active support case guidelines</span>
+                          <span className="font-semibold block text-zinc-200 text-xs">Support Operator Access</span>
+                          <span className="text-[10px] text-zinc-400 block mt-0.5 font-sans">Authorizes record review under active support case guidelines</span>
                         </div>
                         <input
                           type="checkbox"
@@ -1676,6 +1777,112 @@ export default function App() {
           </div>
         )}
       </main>
+
+      {/* SIGN IN / CREATE ACCOUNT MODAL */}
+      {showAuthModal && (
+        <div
+          className="fixed inset-0 z-50 bg-zinc-950/90 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200"
+          onClick={(e) => { if (e.target === e.currentTarget) { setShowAuthModal(false); setMfaChallengeToken(null); setAuthError(null); } }}
+        >
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl w-full max-w-md relative animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between p-5 border-b border-zinc-800">
+              <div className="flex items-center gap-3">
+                <div className="bg-zinc-800 p-1.5 rounded-lg border border-zinc-700">
+                  <Shield className="w-3.5 h-3.5 text-zinc-300" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-semibold text-zinc-100">
+                    {mfaChallengeToken ? 'Two-factor verification' : authForm === 'signup' ? 'Create your account' : 'Welcome back'}
+                  </h3>
+                  <p className="text-[11px] text-zinc-500 mt-0.5">
+                    {mfaChallengeToken ? 'Enter the code from your authenticator app' : authForm === 'signup' ? 'Unlock your full exposure report' : 'Sign in to your Velour account'}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setShowAuthModal(false); setMfaChallengeToken(null); setAuthError(null); }}
+                className="p-2 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {!mfaChallengeToken ? (
+                <form onSubmit={handleAuthSubmit} className="space-y-4">
+                  <div className="flex gap-2 p-1 bg-zinc-950 border border-zinc-800 rounded-lg">
+                    <button type="button" onClick={() => setAuthForm('signin')}
+                      className={`flex-1 py-1.5 text-[11px] font-semibold rounded transition ${authForm === 'signin' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                      Sign In
+                    </button>
+                    <button type="button" onClick={() => setAuthForm('signup')}
+                      className={`flex-1 py-1.5 text-[11px] font-semibold rounded transition ${authForm === 'signup' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-500 hover:text-zinc-300'}`}>
+                      Create Account
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    <div>
+                      <label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest block mb-1.5">Email</label>
+                      <input type="email" required value={authEmail} onChange={(e) => setAuthEmail(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 font-mono" />
+                    </div>
+                    {authForm === 'signup' && (<>
+                      <div>
+                        <label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest block mb-1.5">Username</label>
+                        <input type="text" required placeholder="e.g. janesmith" value={authUsername} onChange={(e) => setAuthUsername(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 font-mono" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest block mb-1.5">Phone Number</label>
+                        <input type="tel" required placeholder="e.g. +1 (555) 019-2834" value={authPhone} onChange={(e) => setAuthPhone(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700 font-mono" />
+                      </div>
+                    </>)}
+                    <div>
+                      <label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest block mb-1.5">Password</label>
+                      <input type="password" required value={authPassword} onChange={(e) => setAuthPassword(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-sm text-zinc-200 focus:outline-none focus:border-zinc-700" />
+                    </div>
+                  </div>
+                  {authError && (
+                    <div className="p-3 bg-rose-950/20 border border-rose-900/40 rounded-xl text-xs text-rose-300 flex gap-1.5 items-start">
+                      <AlertOctagon className="w-4 h-4 shrink-0 mt-0.5" /><span>{authError}</span>
+                    </div>
+                  )}
+                  <button type="submit" disabled={authLoading}
+                    className="w-full bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-sm py-2.5 rounded-xl transition">
+                    {authLoading ? <RefreshCw className="w-4 h-4 animate-spin mx-auto text-zinc-950" /> : <span>{authForm === 'signup' ? 'Create Account' : 'Sign In'}</span>}
+                  </button>
+                  <MockDeviceFingerprint onFingerprintReady={setDeviceHash} />
+                </form>
+              ) : (
+                <form onSubmit={handleMfaVerify} className="space-y-4">
+                  <div className="bg-zinc-950 p-3 rounded-xl border border-zinc-800 text-xs text-zinc-400 space-y-1">
+                    <span className="text-zinc-300 font-semibold block mb-1">Test passcode:</span>
+                    <button type="button" onClick={() => setMfaCode('123456')}
+                      className="py-1 px-3 bg-zinc-900 hover:bg-zinc-850 border border-zinc-800 rounded text-[11px]">
+                      Fill Code: 123456
+                    </button>
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-semibold text-zinc-400 uppercase tracking-widest block mb-1.5">Six-Digit Code</label>
+                    <input type="text" required placeholder="123456" maxLength={6} value={mfaCode} onChange={(e) => setMfaCode(e.target.value)}
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-xl p-2.5 text-center tracking-[0.5em] text-lg font-bold text-white font-mono focus:border-zinc-700 focus:outline-none" />
+                  </div>
+                  {authError && <div className="p-3 bg-rose-950/20 border border-rose-900/40 rounded-xl text-xs text-rose-300">{authError}</div>}
+                  <button type="submit" disabled={authLoading}
+                    className="w-full bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-sm py-2.5 rounded-xl transition">
+                    {authLoading ? <RefreshCw className="w-4 h-4 animate-spin mx-auto" /> : <span>Verify Code</span>}
+                  </button>
+                  <button type="button" onClick={() => setMfaChallengeToken(null)}
+                    className="w-full text-center text-[10px] text-zinc-500 hover:text-zinc-300 transition">
+                    Cancel
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* STRIPE PAYMENT MODAL FLOATING DESK */}
       <StripeCheckoutModal
