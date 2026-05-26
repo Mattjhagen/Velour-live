@@ -5,7 +5,8 @@ import {
   Fingerprint, HelpCircle, LogOut, DollarSign, CheckCircle2, 
   RefreshCw, Eye, EyeOff, FileText, AlertOctagon, Sparkles,
   ArrowRight, ShieldAlert as AlertIcon, Eye as EyeIcon, Globe, LockKeyhole, HeartHandshake, Info,
-  Mail, Phone, AtSign, ChevronDown, ChevronUp, X, Zap, Database, TrendingUp
+  Mail, Phone, AtSign, ChevronDown, ChevronUp, X, Zap, Database, TrendingUp, Send,
+  Share2, Camera
 } from 'lucide-react';
 
 import MockDeviceFingerprint from './components/MockDeviceFingerprint';
@@ -18,11 +19,11 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { User, BreachRecord } from './types';
 
 const SCAN_MESSAGES = [
-  'Checking known breach registries…',
-  'Scanning public data sources…',
-  'Reviewing scam risk indicators…',
-  'Compiling your exposure summary…',
-  'Finalizing results…',
+  'Checking known breach records…',
+  'Reviewing public exposure sources…',
+  'Analyzing publicly available exposure indicators…',
+  'Preparing your privacy summary…',
+  'Finalizing privacy review…',
 ];
 
 export default function App() {
@@ -60,9 +61,19 @@ export default function App() {
   const [simulatedPush, setSimulatedPush] = useState<string | null>(null);
 
   // Navigation / Modal
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'timeline' | 'remediation' | 'privacy_actions' | 'admin' | 'privacy'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'timeline' | 'remediation' | 'privacy_actions' | 'admin' | 'privacy' | 'safety_notices'>('dashboard');
   const [stripeOpen, setStripeOpen] = useState(false);
   const [loadingProfile, setLoadingProfile] = useState(false);
+
+  // Safety notices state
+  const [safetyNotices, setSafetyNotices] = useState<any[]>([]);
+  const [loadingNotices, setLoadingNotices] = useState(false);
+  const [noticeError, setNoticeError] = useState<string | null>(null);
+  const [noticeFormType, setNoticeFormType] = useState<'community_alert' | 'missing_person'>('community_alert');
+  const [noticePhotoBase64, setNoticePhotoBase64] = useState<string | null>(null);
+  const [noticeDocBase64, setNoticeDocBase64] = useState<string | null>(null);
+  const [noticeDocName, setNoticeDocName] = useState<string>('');
+  const [noticeSubmitting, setNoticeSubmitting] = useState(false);
 
   // Session & Device management states
   const [userSessions, setUserSessions] = useState<any[]>([]);
@@ -97,6 +108,12 @@ export default function App() {
       fetchUserSessions();
     }
   }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab === 'safety_notices' && authToken) {
+      fetchSafetyNotices();
+    }
+  }, [activeTab, authToken]);
 
   useEffect(() => {
     if (searchResults.length > 0) {
@@ -135,6 +152,89 @@ export default function App() {
       setLoadingProfile(false);
     }
   }
+
+  async function fetchSafetyNotices() {
+    if (!authToken) return;
+    setLoadingNotices(true);
+    setNoticeError(null);
+    try {
+      const res = await fetch('/api/public-safety-notices', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSafetyNotices(data.notices);
+      } else {
+        setNoticeError(data.error || 'Failed to fetch public safety notices.');
+      }
+    } catch (err) {
+      setNoticeError('Network error retrieving public safety notices.');
+    } finally {
+      setLoadingNotices(false);
+    }
+  }
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        showNotice("Photo must be smaller than 2MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setNoticePhotoBase64(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleDocUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 4 * 1024 * 1024) {
+        showNotice("Documentation must be smaller than 4MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        setNoticeDocBase64(reader.result as string);
+        setNoticeDocName(file.name);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleShareNotice = async (notice: any) => {
+    const isMissingPerson = notice.type === 'missing_person';
+    const shareText = isMissingPerson
+      ? `VERIFIED MISSING PERSON ALERT: ${notice.firstName}. Last seen in ${notice.lastKnownRegion}. Case handled by ${notice.agencyName} (Report #: ${notice.policeReportNumber}). For information, contact ${notice.agencyVerificationNumber}.`
+      : `PUBLIC SAFETY ALERT: ${notice.title} - ${notice.content}`;
+    
+    const shareUrl = window.location.href;
+    
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: notice.title || `Safety Alert: ${notice.firstName}`,
+          text: shareText,
+          url: shareUrl,
+        });
+      } catch (err) {
+        copyToClipboard(shareText);
+      }
+    } else {
+      copyToClipboard(shareText);
+    }
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      showNotice("Notice details copied to clipboard.");
+    }).catch(() => {
+      showNotice("Failed to copy details to clipboard.");
+    });
+  };
 
   const fetchUserSessions = async () => {
     if (!authToken) return;
@@ -592,6 +692,12 @@ export default function App() {
                 AI Guidance
               </button>
               <button
+                onClick={() => setActiveTab('safety_notices')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${activeTab === 'safety_notices' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-400 hover:text-zinc-200'}`}
+              >
+                Public Safety
+              </button>
+              <button
                 onClick={() => setActiveTab('privacy')}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${activeTab === 'privacy' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-400 hover:text-zinc-200'}`}
               >
@@ -669,6 +775,9 @@ export default function App() {
                       <p className="text-[15px] text-zinc-300 max-w-lg leading-relaxed">
                         Velour quietly checks data breach registries and public records to show what information is exposed about you — in seconds, with no account needed.
                       </p>
+                      <p className="text-xs text-zinc-500 max-w-lg leading-relaxed border-l-2 border-zinc-800 pl-3.5 italic">
+                        Online exposure can feel overwhelming. Velour is designed to help you understand what’s out there and what you can do next.
+                      </p>
                     </div>
                     <div className="grid grid-cols-3 gap-5 pt-4 border-t border-zinc-900">
                       {([
@@ -693,7 +802,7 @@ export default function App() {
                     <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-7 shadow-2xl backdrop-blur-sm space-y-5">
                       <div className="space-y-1 text-left">
                         <h3 className="text-lg font-semibold text-white">Free Exposure Check</h3>
-                        <p className="text-xs text-zinc-400">Choose the identifier you feel most comfortable starting with. Scans are processed transiently and never persisted.</p>
+                        <p className="text-xs text-zinc-400">Choose the identifier you feel most comfortable starting with. Searches are processed transiently and never persisted.</p>
                       </div>
 
                       {/* Tab selector for starting identifier */}
@@ -732,9 +841,14 @@ export default function App() {
                                 className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
                               />
                             </div>
-                            <span className="text-[11px] text-zinc-500 block pl-1">
-                              We compare your email against public records to map exposed data points.
-                            </span>
+                            <div className="flex flex-col gap-0.5 pl-1 leading-normal">
+                              <span className="text-[11px] text-zinc-500">
+                                We check known records to identify public exposure points.
+                              </span>
+                              <span className="text-[10px] text-zinc-600 block mt-0.5 font-sans">
+                                Searches are private and never sold or shared.
+                              </span>
+                            </div>
                           </div>
                         )}
 
@@ -751,9 +865,14 @@ export default function App() {
                                 className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
                               />
                             </div>
-                            <span className="text-[11px] text-zinc-500 block pl-1">
-                              Check if your number was indexed in NPD or other public registries.
-                            </span>
+                            <div className="flex flex-col gap-0.5 pl-1 leading-normal">
+                              <span className="text-[11px] text-zinc-500">
+                                Check if your number was indexed in public registries.
+                              </span>
+                              <span className="text-[10px] text-zinc-600 block mt-0.5 font-sans">
+                                Searches are private and never sold or shared.
+                              </span>
+                            </div>
                           </div>
                         )}
 
@@ -770,9 +889,14 @@ export default function App() {
                                 className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
                               />
                             </div>
-                            <span className="text-[11px] text-zinc-500 block pl-1">
-                              Examines database dumps and credentials profiles matching your alias.
-                            </span>
+                            <div className="flex flex-col gap-0.5 pl-1 leading-normal">
+                              <span className="text-[11px] text-zinc-500">
+                                Examines database records matching your alias.
+                              </span>
+                              <span className="text-[10px] text-zinc-600 block mt-0.5 font-sans">
+                                Searches are private and never sold or shared.
+                              </span>
+                            </div>
                           </div>
                         )}
 
@@ -798,9 +922,14 @@ export default function App() {
                                 className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-650 focus:outline-none transition-colors"
                               />
                             </div>
-                            <span className="text-[11px] text-zinc-500 block pl-1">
-                              Query local public broker listings and directory records matching you.
-                            </span>
+                            <div className="flex flex-col gap-0.5 pl-1 leading-normal">
+                              <span className="text-[11px] text-zinc-500">
+                                Query directory records matching you under statutory guidelines.
+                              </span>
+                              <span className="text-[10px] text-zinc-600 block mt-0.5 font-sans">
+                                Searches are private and never sold or shared.
+                              </span>
+                            </div>
                           </div>
                         )}
 
@@ -836,22 +965,22 @@ export default function App() {
                         <button
                           id="run-discovery-submit"
                           type="submit"
-                          className="w-full bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2 mt-1 shadow-sm"
+                          className="w-full bg-white hover:bg-zinc-100 text-zinc-955 text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2 mt-1 shadow-sm cursor-pointer font-semibold"
                         >
-                          <Zap className="w-4 h-4 text-zinc-950" />
-                          Run Free Discovery Scan
+                          <Zap className="w-4 h-4 text-zinc-955" />
+                          Run Free Privacy Review
                         </button>
                       </form>
                       <div className="flex items-center justify-center gap-5 pt-1 border-t border-zinc-900">
                         {([
-                          { icon: Lock, label: 'No account needed' },
-                          { icon: ShieldCheck, label: 'Not stored' },
-                          { icon: CheckCircle2, label: 'Free forever' },
-                        ] as const).map(({ icon: Icon, label }) => (
-                          <span key={label} className="flex items-center gap-1.5 text-[11px] text-zinc-500">
-                            <Icon className="w-3 h-3" />{label}
-                          </span>
-                        ))}
+                           { icon: Lock, label: 'No account needed' },
+                           { icon: ShieldCheck, label: 'Not stored' },
+                           { icon: CheckCircle2, label: 'Free forever' },
+                         ] as const).map(({ icon: Icon, label }) => (
+                           <span key={label} className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+                             <Icon className="w-3 h-3" />{label}
+                           </span>
+                         ))}
                       </div>
                     </div>
                   </div>
@@ -860,7 +989,7 @@ export default function App() {
                 {/* Data sources strip */}
                 <div className="space-y-4 text-left">
                   <div>
-                    <h3 className="text-zinc-200 font-semibold text-sm">Data sources scanned</h3>
+                    <h3 className="text-zinc-200 font-semibold text-sm">Data sources checked</h3>
                     <p className="text-zinc-400 text-xs mt-1">Independent registries checked under explicit user consent.</p>
                   </div>
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -881,7 +1010,7 @@ export default function App() {
                 {/* Trust & compliance */}
                 <div className="p-8 bg-zinc-900/20 rounded-2xl border border-zinc-800/40 grid grid-cols-1 md:grid-cols-3 gap-8 text-left">
                   {[
-                    { icon: LockKeyhole, title: 'Zero-knowledge data policy', desc: 'Scans are processed transiently. We do not store your query data or write it to permanent storage.' },
+                    { icon: LockKeyhole, title: 'Zero-knowledge data policy', desc: 'Privacy reviews are processed transiently. We do not store your query data or write it to permanent storage.' },
                     { icon: ShieldCheck, title: 'Regulatory compliance', desc: 'Consistent with FCRA, CCPA, and global consumer privacy frameworks. Sensitive details require identity verification.' },
                     { icon: HeartHandshake, title: 'Privacy-first by design', desc: 'No ad targeting, behavioral tracking, or data brokering. Your privacy is what we protect.' },
                   ].map(({ icon: Icon, title, desc }) => (
@@ -897,40 +1026,17 @@ export default function App() {
               </div>
             )}
 
-            {/* === PHASE 2: SCANNING === */}
+            {/* === PHASE 2: REVIEWING === */}
             {discoveryPhase === 'scanning' && (
-              <div className="flex flex-col items-center justify-center min-h-[520px] py-20 space-y-10 animate-in fade-in duration-200">
-                <div className="relative">
-                  <div className="w-20 h-20 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center shadow-2xl">
-                    <Shield className="w-9 h-9 text-indigo-400 animate-pulse" />
-                  </div>
-                  <div className="absolute -inset-3 rounded-3xl border border-indigo-500/15 animate-ping" />
+              <div className="flex flex-col items-center justify-center min-h-[400px] py-16 space-y-6 animate-in fade-in duration-200">
+                <div className="w-10 h-10 rounded-full border-2 border-zinc-800 border-t-zinc-400 animate-spin" />
+                <div className="text-center space-y-1.5 max-w-sm">
+                  <h3 className="text-sm font-semibold text-zinc-200">Preparing your privacy summary</h3>
+                  <p className="text-zinc-500 text-xs transition-all duration-300 min-h-[16px]">{SCAN_MESSAGES[scanStep]}</p>
                 </div>
-                <div className="text-center space-y-2 max-w-xs">
-                  <h3 className="text-xl font-semibold text-white">Scanning your exposure</h3>
-                  <p className="text-zinc-400 text-sm min-h-[20px] transition-all duration-300">{SCAN_MESSAGES[scanStep]}</p>
-                </div>
-                <div className="w-72 space-y-3">
-                  <div className="w-full h-[3px] bg-zinc-900 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-indigo-500 rounded-full transition-all duration-700"
-                      style={{ width: `${Math.min(((scanStep + 1) / SCAN_MESSAGES.length) * 100, 90)}%` }}
-                    />
-                  </div>
-                  <p className="text-center text-[11px] text-zinc-600 font-mono truncate">{discoveryEmail}</p>
-                </div>
-                <div className="grid grid-cols-3 gap-3 w-full max-w-sm">
-                  {['Breach databases', 'Public records', 'Risk indicators'].map((label, i) => (
-                    <div
-                      key={label}
-                      className={`text-center p-2.5 rounded-lg border text-[10px] font-mono transition-all duration-500 ${
-                        scanStep > i ? 'bg-zinc-900 border-zinc-800 text-zinc-400' : 'border-zinc-900 text-zinc-700'
-                      }`}
-                    >
-                      {scanStep > i ? '✓ ' : ''}{label}
-                    </div>
-                  ))}
-                </div>
+                <p className="text-[10px] text-zinc-650 font-mono tracking-wider lowercase">
+                  {discoveryType === 'email' ? discoveryEmail : discoveryType === 'phone' ? discoveryPhone : discoveryType === 'username' ? discoveryUsername : discoveryLastName}
+                </p>
               </div>
             )}
 
@@ -941,11 +1047,11 @@ export default function App() {
                 <div className="text-center space-y-3">
                   <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-full text-zinc-400 text-[11px] font-medium">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Scan complete</span>
+                    <span>Review complete</span>
                   </div>
                   <h2 className="text-3xl font-bold text-white">Your Exposure Summary</h2>
                   <p className="text-zinc-400 text-sm">
-                    Scanned for: <span className="text-zinc-200 font-medium font-mono bg-zinc-950 px-2 py-1 rounded border border-zinc-900">{discoveryResults.queriedTarget}</span>
+                    Checked for: <span className="text-zinc-200 font-medium font-mono bg-zinc-950 px-2 py-1 rounded border border-zinc-900">{discoveryResults.queriedTarget}</span>
                   </p>
                 </div>
 
@@ -960,7 +1066,7 @@ export default function App() {
                         {discoveryResults.limitedAccess ? '—' : (discoveryResults.breachCount ?? 0)}
                       </div>
                       <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed font-sans">
-                        {discoveryResults.limitedAccess ? 'Scan completed' : discoveryResults.breachCount === 0 ? 'No known data events' : `Exposure database matches`}
+                        {discoveryResults.limitedAccess ? 'Review complete' : discoveryResults.breachCount === 0 ? 'No known data events' : `Exposure database matches`}
                       </p>
                     </div>
                   </div>
@@ -973,7 +1079,7 @@ export default function App() {
                       <div className="text-3xl font-bold text-white">
                         {discoveryResults.limitedAccess ? '—' : (discoveryResults.sources?.length ?? 0)}
                       </div>
-                      <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed font-sans">Public datasets & brokers scanned</p>
+                      <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed font-sans">Public datasets & brokers checked</p>
                     </div>
                   </div>
 
@@ -1049,7 +1155,7 @@ export default function App() {
                   ) : (
                     <div className="p-12 text-center bg-zinc-950/30 border border-zinc-900 rounded-2xl">
                       <ShieldCheck className="w-6 h-6 text-zinc-650 mx-auto mb-2" />
-                      <p className="text-xs text-zinc-500 font-sans">No immediate active exposure events cataloged for this target.</p>
+                      <p className="text-xs text-zinc-500 font-sans">We didn’t find significant public exposure indicators for this identifier at this time.</p>
                     </div>
                   )}
                 </div>
@@ -1189,48 +1295,47 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 4. PREMIUM OPTION - FRAMED AS CONVENIENCE & TIME-SAVING */}
+                {/* 4. FREE ACCOUNT CREATION EXPLANATION */}
                 <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-8 sm:p-10 text-center space-y-6 relative overflow-hidden">
                   <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-zinc-800/80 to-transparent" />
                   <div className="space-y-2 max-w-xl mx-auto">
-                    <h3 className="text-xl font-bold text-white">Prefer Guided Removal Assistance?</h3>
+                    <h3 className="text-xl font-bold text-white">Create a free account</h3>
                     <p className="text-zinc-400 text-xs leading-relaxed font-sans">
-                      For users who prefer guided assistance, Velour can coordinate formal opt-out and removal requests on your behalf.
-                      We manage provider follow-ups, submit standardized statutory suppression forms, coordinate supporting paperwork, and track ongoing removal responses so you don't have to spend hours filing them.
+                      Setting up a free account helps you stay on top of your digital footprint with optional support tools:
                     </p>
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 max-w-2.5xl mx-auto text-left">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3.5 max-w-3.5xl mx-auto text-left">
                     {[
-                      { title: 'Administrative Assistance', desc: 'We compile, sign, and submit formal regulatory opt-out requests.' },
-                      { title: 'Active Response Tracking', desc: 'Our operations team monitors broker response logs for completion.' },
-                      { title: 'Continuous Exposure Auditing', desc: 'We regularly scan registries to verify your details don\'t reappear.' }
+                      { title: 'Monitor Exposure', desc: 'Monitor future exposure changes automatically.' },
+                      { title: 'Request Removals', desc: 'Coordinate opt-out removals from major brokers.' },
+                      { title: 'Privacy Alerts', desc: 'Receive proactive alerts if your data appears online.' },
+                      { title: 'Detailed Reports', desc: 'Unlock full records and detailed compliance breakdowns.' }
                     ].map((item) => (
-                      <div key={item.title} className="p-4 bg-zinc-950/40 border border-zinc-900 rounded-xl space-y-1">
+                      <div key={item.title} className="p-4 bg-zinc-955/40 border border-zinc-900 rounded-xl space-y-1">
                         <span className="text-[11px] font-bold text-zinc-200 block font-sans">{item.title}</span>
                         <p className="text-[10px] text-zinc-400 leading-normal font-sans">{item.desc}</p>
                       </div>
                     ))}
                   </div>
 
-                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
                     <button
                       id="create-account-post-discovery"
                       onClick={() => {
                         setShowAuthModal(true);
                         setAuthForm('signup');
-                        // Pre-populate sign-up input where appropriate
                         if (discoveryType === 'email') setAuthEmail(discoveryEmail);
                         else if (discoveryType === 'phone') setAuthPhone(discoveryPhone);
                         else if (discoveryType === 'username') setAuthUsername(discoveryUsername);
                       }}
-                      className="px-8 py-3 bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-xs rounded-xl transition-colors flex items-center gap-2 shadow-sm"
+                      className="px-8 py-3 bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-xs rounded-xl transition-colors flex items-center gap-2 shadow-sm cursor-pointer"
                     >
-                      Coordinate Removals with Velour
-                      <ArrowRight className="w-4 h-4 text-zinc-950" />
+                      <span>Create Free Account</span>
+                      <ArrowRight className="w-4 h-4 text-zinc-955" />
                     </button>
                   </div>
-                  <p className="text-[10px] text-zinc-650 font-sans mt-2">No payment information required to run checks · Transparency-first policy</p>
+                  <p className="text-[10px] text-zinc-650 font-sans mt-2">No payment card required · Low-pressure safety companion</p>
                 </div>
               </div>
             )}
@@ -1285,6 +1390,12 @@ export default function App() {
                 className={`px-4 py-2.5 text-xs font-semibold rounded-md transition-all shrink-0 ${activeTab === 'remediation' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-400'}`}
               >
                 Guidance
+              </button>
+              <button
+                onClick={() => setActiveTab('safety_notices')}
+                className={`px-4 py-2.5 text-xs font-semibold rounded-md transition-all shrink-0 ${activeTab === 'safety_notices' ? 'bg-zinc-800 text-zinc-100 shadow' : 'text-zinc-400'}`}
+              >
+                Safety
               </button>
               <button
                 onClick={() => setActiveTab('privacy')}
@@ -1429,9 +1540,9 @@ export default function App() {
                       <div className="text-center py-16 bg-zinc-950/10 border border-zinc-850/60 rounded-2xl p-8 space-y-3.5">
                         <ShieldCheck className="w-5 h-5 text-zinc-600 mx-auto" />
                         <div className="space-y-1">
-                          <h4 className="text-xs font-semibold text-zinc-300">No active exposures detected</h4>
+                          <h4 className="text-xs font-semibold text-zinc-300">Minimal exposure indicators found</h4>
                           <p className="text-[11px] text-zinc-400 max-w-sm mx-auto leading-relaxed font-sans">
-                            Your monitored accounts appear stable. Run an audit above to query regional exposure records.
+                            We didn’t find significant public exposure indicators for this email at this time.
                           </p>
                         </div>
                       </div>
@@ -1609,7 +1720,7 @@ export default function App() {
                       <div className="flex items-center justify-between p-3 bg-zinc-950/40 rounded-lg border border-zinc-850/80">
                         <div>
                           <span className="font-semibold block text-zinc-300 text-xs">Email Delivery</span>
-                          <span className="text-[10px] text-zinc-400 block mt-0.5">Instant notification on continuous scans</span>
+                          <span className="text-[10px] text-zinc-400 block mt-0.5">Instant notification on continuous updates</span>
                         </div>
                         <input
                           type="checkbox"
@@ -1724,10 +1835,10 @@ export default function App() {
                       <div className="grid grid-cols-2 gap-2 text-[10px] font-medium">
                         <button
                           type="button"
-                          onClick={() => setSimulatedPush("[Velour Archive Scan] Scan completed: 0 new exposures detected. Your personal registry remains secured.")}
+                          onClick={() => setSimulatedPush("[Velour Privacy Monitor] Review completed: 0 new exposures detected. Your personal registry remains secured.")}
                           className="p-2 bg-zinc-950 hover:bg-zinc-900 border border-zinc-850 rounded-lg text-zinc-350 hover:text-white transition duration-200 text-left font-sans cursor-pointer"
                         >
-                          🔍 Scan updates
+                          🔍 Review updates
                         </button>
                         <button
                           type="button"
@@ -1820,8 +1931,618 @@ export default function App() {
                 authToken={authToken!} 
                 onShowNotice={showNotice} 
                 isVerified={currentUser?.isVerified || false} 
-                onOpenVerification={() => setActiveTab('dashboard')} 
+                onOpenVerification={() => {
+                  setActiveTab('dashboard');
+                  setTimeout(() => {
+                    const idSection = document.getElementById('privacy-assurance-verification');
+                    if (idSection) idSection.scrollIntoView({ behavior: 'smooth' });
+                  }, 100);
+                }} 
               />
+            )}
+
+            {/* 3.8 TAB: PUBLIC SAFETY NOTICES */}
+            {activeTab === 'safety_notices' && (
+              <div className="space-y-6 animate-in fade-in duration-200">
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 border-b border-zinc-900 pb-5 text-left">
+                  <div>
+                    <h2 className="text-xl font-bold tracking-tight text-white flex items-center gap-2.5">
+                      <AlertTriangle className="w-5 h-5 text-zinc-405" />
+                      <span>Public Safety Notices</span>
+                    </h2>
+                    <p className="text-xs text-[#B0B7C3] mt-1.5 leading-relaxed max-w-2xl">
+                      Read active security threat bulletins, scam indicators, and missing person awareness alerts. Reviewing bulletins is free and unverified; submitting notices requires identity verification.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Form to submit a notice */}
+                <div className="bg-zinc-900/40 border border-zinc-800 p-6 rounded-2xl text-left space-y-4">
+                  <h3 className="text-xs font-semibold text-zinc-200 flex items-center gap-2">
+                    <Send className="w-4 h-4 text-zinc-405" />
+                    <span>Report Threat / Submit Notice</span>
+                  </h3>
+
+                  {currentUser?.isVerified ? (
+                    <div className="space-y-4">
+                      {/* Notice type selector */}
+                      <div className="flex gap-2 border-b border-zinc-800 pb-3">
+                        <button
+                          type="button"
+                          onClick={() => setNoticeFormType('community_alert')}
+                          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                            noticeFormType === 'community_alert'
+                              ? 'bg-zinc-800 text-zinc-150 border border-zinc-700'
+                              : 'text-zinc-500 hover:text-zinc-300'
+                          }`}
+                        >
+                          Security & Cyber Threat Notice
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNoticeFormType('missing_person')}
+                          className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                            noticeFormType === 'missing_person'
+                              ? 'bg-amber-955/40 text-amber-300 border border-amber-900/50'
+                              : 'text-zinc-500 hover:text-zinc-300'
+                          }`}
+                        >
+                          Verified Missing Person Bulletin
+                        </button>
+                      </div>
+
+                      <form onSubmit={async (e) => {
+                        e.preventDefault();
+                        setNoticeSubmitting(true);
+                        const form = e.currentTarget;
+                        
+                        try {
+                          let payload: any = { type: noticeFormType };
+                          
+                          if (noticeFormType === 'community_alert') {
+                            const title = (form.elements.namedItem('noticeTitle') as HTMLInputElement).value;
+                            const category = (form.elements.namedItem('noticeCategory') as HTMLSelectElement).value;
+                            const content = (form.elements.namedItem('noticeContent') as HTMLTextAreaElement).value;
+                            payload = { ...payload, title, category, content };
+                          } else {
+                            const firstName = (form.elements.namedItem('firstName') as HTMLInputElement).value;
+                            const ageRange = (form.elements.namedItem('ageRange') as HTMLSelectElement).value;
+                            const height = (form.elements.namedItem('height') as HTMLInputElement).value;
+                            const hairColor = (form.elements.namedItem('hairColor') as HTMLInputElement).value;
+                            const eyeColor = (form.elements.namedItem('eyeColor') as HTMLInputElement).value;
+                            const distinguishingFeatures = (form.elements.namedItem('distinguishingFeatures') as HTMLTextAreaElement).value;
+                            const lastKnownRegion = (form.elements.namedItem('lastKnownRegion') as HTMLInputElement).value;
+                            const emergencyContact = (form.elements.namedItem('emergencyContact') as HTMLInputElement).value;
+                            
+                            const policeReportNumber = (form.elements.namedItem('policeReportNumber') as HTMLInputElement).value;
+                            const agencyName = (form.elements.namedItem('agencyName') as HTMLInputElement).value;
+                            const agencyVerificationNumber = (form.elements.namedItem('agencyVerificationNumber') as HTMLInputElement).value;
+                            
+                            payload = {
+                              ...payload,
+                              firstName,
+                              ageRange,
+                              height,
+                              hairColor,
+                              eyeColor,
+                              distinguishingFeatures,
+                              lastKnownRegion,
+                              emergencyContact,
+                              policeReportNumber,
+                              agencyName,
+                              agencyVerificationNumber,
+                              photoBase64: noticePhotoBase64 || undefined,
+                              caseDocumentationBase64: noticeDocBase64 || undefined,
+                              caseDocumentationName: noticeDocName || undefined
+                            };
+                          }
+
+                          const res = await fetch('/api/public-safety-notices', {
+                            method: 'POST',
+                            headers: {
+                              'Content-Type': 'application/json',
+                              'Authorization': `Bearer ${authToken}`
+                            },
+                            body: JSON.stringify(payload)
+                          });
+                          const data = await res.json();
+                          if (data.success) {
+                            showNotice(noticeFormType === 'missing_person' 
+                              ? "Verified Missing Person Bulletin submitted for admin moderation."
+                              : "Community safety notice submitted successfully for moderation.");
+                            fetchSafetyNotices();
+                            form.reset();
+                            setNoticePhotoBase64(null);
+                            setNoticeDocBase64(null);
+                            setNoticeDocName('');
+                          } else {
+                            showNotice(data.error || "Failed to submit notice.");
+                          }
+                        } catch (err) {
+                          showNotice("Network error submitting notice.");
+                        } finally {
+                          setNoticeSubmitting(false);
+                        }
+                      }} className="space-y-4">
+                        
+                        {noticeFormType === 'community_alert' ? (
+                          <>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Notice Title</label>
+                                <input
+                                  name="noticeTitle"
+                                  type="text"
+                                  required
+                                  placeholder="e.g. Active phishing attack targeting local bank"
+                                  className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Category</label>
+                                <select
+                                  name="noticeCategory"
+                                  className="w-full bg-zinc-955 border border-zinc-850 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none"
+                                >
+                                  <option value="threat">Security Threat</option>
+                                  <option value="leak">Credential Leak</option>
+                                  <option value="scam">Scam / Phishing Alert</option>
+                                  <option value="other">Other Alert</option>
+                                </select>
+                              </div>
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Notice Content Details</label>
+                              <textarea
+                                name="noticeContent"
+                                required
+                                placeholder="Describe the threat vectors, indicators of compromise, or target platforms clearly."
+                                rows={3}
+                                className="w-full bg-zinc-955 border border-zinc-850 rounded-xl p-3 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                              />
+                            </div>
+                          </>
+                        ) : (
+                          <>
+                            {/* Missing Person Form Fields */}
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">First Name</label>
+                                <input
+                                  name="firstName"
+                                  type="text"
+                                  required
+                                  placeholder="Individual's first name"
+                                  className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Age Range</label>
+                                <select
+                                  name="ageRange"
+                                  className="w-full bg-zinc-955 border border-zinc-850 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none"
+                                >
+                                  <option value="Child (under 12)">Child (under 12)</option>
+                                  <option value="Teen (13-17)">Teen (13-17)</option>
+                                  <option value="Young Adult (18-25)">Young Adult (18-25)</option>
+                                  <option value="Adult (26-50)">Adult (26-50)</option>
+                                  <option value="Adult (51-64)">Adult (51-64)</option>
+                                  <option value="Senior (65+)">Senior (65+)</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Height</label>
+                                <input
+                                  name="height"
+                                  type="text"
+                                  required
+                                  placeholder="e.g. 5ft 6in"
+                                  className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Hair Color</label>
+                                <input
+                                  name="hairColor"
+                                  type="text"
+                                  required
+                                  placeholder="e.g. Brown"
+                                  className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Eye Color</label>
+                                <input
+                                  name="eyeColor"
+                                  type="text"
+                                  required
+                                  placeholder="e.g. Blue"
+                                  className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Last Known Region / Location</label>
+                                <input
+                                  name="lastKnownRegion"
+                                  type="text"
+                                  required
+                                  placeholder="e.g. Duluth, MN"
+                                  className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Emergency Family/Guardian Contact</label>
+                                <input
+                                  name="emergencyContact"
+                                  type="text"
+                                  required
+                                  placeholder="e.g. (555) 019-2831 or Minneapolis PD"
+                                  className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Distinguishing Features / Tattoos</label>
+                              <textarea
+                                name="distinguishingFeatures"
+                                placeholder="Describe tattoos, scars, clothing worn, or other specific descriptors."
+                                rows={2}
+                                className="w-full bg-zinc-955 border border-zinc-850 rounded-xl p-3 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                              />
+                            </div>
+
+                            {/* Verification Agency Details section */}
+                            <div className="border-t border-zinc-800/80 pt-4 space-y-4">
+                              <span className="text-[10px] font-semibold text-amber-500 uppercase tracking-widest block font-mono">
+                                Investigating Authority & Report Verification
+                              </span>
+
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                <div>
+                                  <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Police Agency Name</label>
+                                  <input
+                                    name="agencyName"
+                                    type="text"
+                                    required
+                                    placeholder="e.g. Minneapolis Police Dept"
+                                    className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Police Report / Case #</label>
+                                  <input
+                                    name="policeReportNumber"
+                                    type="text"
+                                    required
+                                    placeholder="e.g. MPD-2026-0098412"
+                                    className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 font-mono"
+                                  />
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Agency Verification Phone #</label>
+                                  <input
+                                    name="agencyVerificationNumber"
+                                    type="text"
+                                    required
+                                    placeholder="e.g. (612) 673-5700"
+                                    className="w-full bg-zinc-955 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700 font-mono"
+                                  />
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                {/* Photo Upload */}
+                                <div className="space-y-2 text-left">
+                                  <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block font-mono">
+                                    Recent Photo of Individual
+                                  </label>
+                                  <div className="flex items-center gap-4">
+                                    {noticePhotoBase64 ? (
+                                      <div className="relative w-20 h-20 rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 flex-shrink-0">
+                                        <img src={noticePhotoBase64} alt="Preview" className="w-full h-full object-cover" />
+                                        <button
+                                          type="button"
+                                          onClick={() => setNoticePhotoBase64(null)}
+                                          className="absolute top-1 right-1 bg-zinc-900/80 hover:bg-zinc-900 text-zinc-300 hover:text-white rounded-full p-1 transition cursor-pointer"
+                                        >
+                                          <X className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <label className="w-20 h-20 rounded-xl border border-dashed border-zinc-800 hover:border-zinc-700 bg-zinc-950 flex flex-col items-center justify-center cursor-pointer transition flex-shrink-0 group">
+                                        <Camera className="w-5 h-5 text-zinc-655 group-hover:text-zinc-400 transition" />
+                                        <span className="text-[8.5px] text-zinc-600 group-hover:text-zinc-500 mt-1 font-mono uppercase tracking-wider">Upload</span>
+                                        <input
+                                          type="file"
+                                          accept="image/*"
+                                          onChange={handlePhotoUpload}
+                                          className="hidden"
+                                        />
+                                      </label>
+                                    )}
+                                    <div className="text-[10px] text-zinc-500 leading-normal">
+                                      <p className="font-semibold text-zinc-400">Clear frontal portrait preferred.</p>
+                                      <p>Maximum size 2MB. Preview updates instantly.</p>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Doc Upload */}
+                                <div className="space-y-2 text-left">
+                                  <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block font-mono">
+                                    Official Police Documentation (Verification File)
+                                  </label>
+                                  <div className="flex items-center gap-3">
+                                    {noticeDocBase64 ? (
+                                      <div className="flex items-center gap-2 p-2 px-3 rounded-xl border border-zinc-800 bg-zinc-950 text-zinc-300 text-xs">
+                                        <FileText className="w-4 h-4 text-indigo-400" />
+                                        <span className="truncate max-w-[150px] font-mono text-[10.5px]">{noticeDocName}</span>
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setNoticeDocBase64(null);
+                                            setNoticeDocName('');
+                                          }}
+                                          className="text-zinc-500 hover:text-zinc-300 ml-1 cursor-pointer"
+                                        >
+                                          <X className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <label className="px-4 py-2.5 rounded-xl border border-zinc-850 hover:border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-300 text-xs font-semibold cursor-pointer transition flex items-center gap-1.5">
+                                        <FileText className="w-4 h-4 text-zinc-500" />
+                                        <span>Attach PDF / Image</span>
+                                        <input
+                                          type="file"
+                                          accept=".pdf,image/*"
+                                          onChange={handleDocUpload}
+                                          className="hidden"
+                                        />
+                                      </label>
+                                    )}
+                                    <p className="text-[10px] text-zinc-500 leading-normal">
+                                      Police report PDF or flyer (max 4MB).
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          </>
+                        )}
+
+                        <div className="flex justify-end pt-2">
+                          <button
+                            type="submit"
+                            disabled={noticeSubmitting}
+                            className="px-5 py-2 rounded-xl bg-white hover:bg-zinc-100 text-zinc-955 text-xs font-bold transition flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
+                          >
+                            {noticeSubmitting ? (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin text-zinc-955" />
+                                <span>Submitting Bulletin...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Send className="w-3.5 h-3.5 text-zinc-955" />
+                                <span>Submit Notice to Registry</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </form>
+                    </div>
+                  ) : (
+                    <div className="p-5 bg-zinc-955/65 rounded-xl border border-zinc-850/60 flex flex-col sm:flex-row items-center justify-between gap-4 text-xs">
+                      <div className="space-y-1 text-left">
+                        <span className="font-semibold text-zinc-250 block">Identity Verification Required</span>
+                        <p className="text-zinc-400 leading-normal text-[11px] font-sans">
+                          Verification helps prevent unauthorized searches and protects sensitive records. To ensure safety, safety notice submissions are restricted to verified accounts.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setActiveTab('dashboard');
+                          setTimeout(() => {
+                            const idSection = document.getElementById('privacy-assurance-verification');
+                            if (idSection) idSection.scrollIntoView({ behavior: 'smooth' });
+                          }, 100);
+                        }}
+                        className="px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-semibold rounded-xl transition whitespace-nowrap cursor-pointer"
+                      >
+                        Verify Identity
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* List of active notices */}
+                <div className="space-y-4 text-left">
+                  <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider font-mono px-1">
+                    Active Bulletins ({safetyNotices.length})
+                  </span>
+
+                  {loadingNotices ? (
+                    <div className="text-center py-12 space-y-3">
+                      <RefreshCw className="w-5 h-5 animate-spin text-zinc-650 mx-auto" />
+                      <p className="text-xs text-zinc-500 font-mono">Loading safety registry...</p>
+                    </div>
+                  ) : noticeError ? (
+                    <div className="p-4 bg-rose-955/20 border border-rose-900/40 rounded-xl text-xs text-rose-300">
+                      {noticeError}
+                    </div>
+                  ) : safetyNotices.length === 0 ? (
+                    <p className="text-xs text-zinc-555 italic py-6 text-center">No public safety notices logged in registry.</p>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-4">
+                      {safetyNotices.map((notice) => (
+                        <div key={notice.id}>
+                          {notice.type === 'missing_person' ? (
+                            /* Missing Person Alert layout */
+                            <div className={`border rounded-2xl p-5 sm:p-6 space-y-4 transition text-left ${
+                              notice.status === 'located_safe'
+                                ? 'bg-zinc-900/20 border-emerald-950/60'
+                                : 'bg-zinc-900/30 border-amber-900/40 shadow-sm'
+                            }`}>
+                              <div className="flex flex-col md:flex-row gap-5">
+                                {/* Photo column */}
+                                {notice.photoBase64 ? (
+                                  <div className="w-28 h-28 sm:w-36 sm:h-36 rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 flex-shrink-0 mx-auto md:mx-0">
+                                    <img 
+                                      src={notice.photoBase64} 
+                                      alt={`${notice.firstName} portrait`} 
+                                      className="w-full h-full object-cover" 
+                                    />
+                                  </div>
+                                ) : (
+                                  <div className="w-28 h-28 sm:w-36 sm:h-36 rounded-xl border border-zinc-800 bg-zinc-950/60 flex flex-col items-center justify-center flex-shrink-0 mx-auto md:mx-0">
+                                    <Camera className="w-8 h-8 text-zinc-700" />
+                                    <span className="text-[9px] text-zinc-655 font-mono mt-1">NO PHOTO</span>
+                                  </div>
+                                )}
+
+                                {/* Content column */}
+                                <div className="flex-1 space-y-3.5">
+                                  <div className="flex items-start justify-between gap-3 flex-wrap">
+                                    <div>
+                                      <div className="flex items-center gap-2 flex-wrap">
+                                        <span className={`px-2 py-0.5 rounded text-[9px] font-bold border leading-none uppercase tracking-wide ${
+                                          notice.status === 'located_safe'
+                                            ? 'bg-emerald-955/20 text-emerald-400 border-emerald-900/30'
+                                            : 'bg-amber-955/20 text-amber-500 border-amber-900/30 animate-pulse'
+                                        }`}>
+                                          {notice.status === 'located_safe' ? '✓ Located Safe' : '⚠️ Verified Active Alert'}
+                                        </span>
+                                        <span className="capitalize bg-zinc-950 border border-zinc-850/60 text-zinc-500 px-2 py-0.5 rounded text-[9px] font-mono leading-none">
+                                          Missing Person Bulletin
+                                        </span>
+                                      </div>
+                                      <h4 className="text-base font-bold text-zinc-100 mt-2">{notice.title}</h4>
+                                    </div>
+                                    <span className="text-[10px] text-zinc-500 font-mono">
+                                      {new Date(notice.createdAt).toLocaleString()}
+                                    </span>
+                                  </div>
+
+                                  {/* Sleek physical descriptions grid */}
+                                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-zinc-950/50 p-3 rounded-xl border border-zinc-900 text-[11px] leading-relaxed">
+                                    <div>
+                                      <span className="text-zinc-500 block text-[9px] uppercase font-mono tracking-wider">Age Range</span>
+                                      <span className="text-zinc-350 font-semibold">{notice.ageRange}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-zinc-500 block text-[9px] uppercase font-mono tracking-wider">Height</span>
+                                      <span className="text-zinc-350 font-semibold">{notice.height}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-zinc-500 block text-[9px] uppercase font-mono tracking-wider">Hair / Eyes</span>
+                                      <span className="text-zinc-305 font-semibold">{notice.hairColor} / {notice.eyeColor}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-zinc-500 block text-[9px] uppercase font-mono tracking-wider">Last Known Region</span>
+                                      <span className="text-zinc-350 font-semibold">{notice.lastKnownRegion}</span>
+                                    </div>
+                                  </div>
+
+                                  {/* Distinguishing Features */}
+                                  {notice.distinguishingFeatures && (
+                                    <div className="text-[11px] leading-relaxed">
+                                      <span className="text-zinc-500 block text-[9px] uppercase font-mono tracking-wider mb-0.5">Distinguishing Features</span>
+                                      <p className="text-zinc-300 bg-zinc-955/20 p-2 rounded-lg border border-zinc-900/60 font-sans">{notice.distinguishingFeatures}</p>
+                                    </div>
+                                  )}
+
+                                  {/* Law Enforcement Verification Details */}
+                                  <div className="bg-zinc-950/60 border border-zinc-850/30 rounded-xl p-3.5 space-y-2.5 text-[11px]">
+                                    <div className="flex items-center gap-1.5 border-b border-zinc-900 pb-1.5">
+                                      <HeartHandshake className="w-3.5 h-3.5 text-zinc-400" />
+                                      <span className="font-bold text-zinc-300 text-[10px] uppercase tracking-wider font-mono">Verification Authorities</span>
+                                    </div>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2.5 text-[11px]">
+                                      <div>
+                                        <span className="text-zinc-500 block font-mono text-[9px] uppercase">Investigating Agency</span>
+                                        <span className="text-zinc-300 font-semibold">{notice.agencyName}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-zinc-500 block font-mono text-[9px] uppercase">Police Report Case Number</span>
+                                        <span className="text-zinc-300 font-semibold font-mono">{notice.policeReportNumber}</span>
+                                      </div>
+                                      <div className="sm:col-span-2">
+                                        <span className="text-zinc-500 block font-mono text-[9px] uppercase">Agency Verification Line (Non-Emergency)</span>
+                                        <div className="flex items-center gap-1.5 mt-0.5">
+                                          <Phone className="w-3.5 h-3.5 text-zinc-500" />
+                                          <a href={`tel:${notice.agencyVerificationNumber}`} className="text-indigo-400 hover:text-indigo-300 hover:underline font-mono font-semibold">
+                                            {notice.agencyVerificationNumber}
+                                          </a>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Standard Emergency Safety Disclaimer */}
+                                  <div className="p-3 bg-amber-955/10 border border-amber-900/20 rounded-xl text-[10px] text-amber-500 leading-relaxed font-sans">
+                                    <span className="font-bold uppercase tracking-wider block mb-0.5">Official Safety Alert Notice</span>
+                                    This bulletin is compiled from verified law enforcement records. Do not attempt to apprehend or intervene. If you have information regarding this individual, contact the verifying law enforcement agency directly or call 911.
+                                  </div>
+
+                                  {/* Share button */}
+                                  <div className="flex justify-between items-center pt-1 flex-wrap gap-2 text-[10.5px]">
+                                    <span className="text-zinc-500 font-mono text-[9.5px]">Reported By: {notice.reportedBy}</span>
+                                    <button
+                                      onClick={() => handleShareNotice(notice)}
+                                      className="px-4 py-2 bg-zinc-800 hover:bg-zinc-750 text-zinc-200 border border-zinc-700 text-xs font-semibold rounded-xl transition flex items-center gap-1.5 cursor-pointer shadow-sm"
+                                    >
+                                      <Share2 className="w-3.5 h-3.5" />
+                                      <span>Share Alert Notice</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            /* Community/Threat Notice Alert layout */
+                            <div className="bg-zinc-900/30 border border-zinc-850 rounded-2xl p-5 space-y-4 text-left">
+                              <div className="flex items-center justify-between gap-3 flex-wrap">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="capitalize bg-zinc-950 border border-zinc-850/60 text-zinc-400 px-2.5 py-0.5 rounded text-[9.5px] font-mono leading-none">
+                                      {notice.category} Alert
+                                    </span>
+                                    <span className="bg-emerald-955/20 text-emerald-400 border border-emerald-900/30 px-2 py-0.5 rounded text-[9px] font-bold leading-none uppercase">
+                                      Verified Active
+                                    </span>
+                                  </div>
+                                  <h4 className="text-sm font-bold text-zinc-200 mt-2">{notice.title}</h4>
+                                </div>
+                                <span className="text-[10px] text-zinc-500 font-mono">
+                                  {new Date(notice.createdAt).toLocaleString()}
+                                </span>
+                              </div>
+                              <p className="text-xs text-zinc-400 leading-relaxed font-sans">{notice.content}</p>
+                              <div className="text-[10px] text-zinc-555 border-t border-zinc-900/60 pt-3 flex justify-between items-center font-mono">
+                                <span>Reported By: {notice.reportedBy}</span>
+                                <button
+                                  onClick={() => handleShareNotice(notice)}
+                                  className="px-3 py-1.5 bg-zinc-850 hover:bg-zinc-800 text-zinc-350 border border-zinc-800 text-[10.5px] font-semibold rounded-lg transition flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Share2 className="w-3.5 h-3.5 text-zinc-405" />
+                                  <span>Share Alert</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
 
             {/* 4. TAB: ADMINISTRATIVE COMPLIANCE CENTRE */}
@@ -2074,7 +2795,11 @@ export default function App() {
                     {mfaChallengeToken ? 'Two-factor verification' : authForm === 'signup' ? 'Create your account' : 'Welcome back'}
                   </h3>
                   <p className="text-[11px] text-zinc-500 mt-0.5">
-                    {mfaChallengeToken ? 'Enter the code from your authenticator app' : authForm === 'signup' ? 'Unlock your full exposure report' : 'Sign in to your Velour account'}
+                    {mfaChallengeToken 
+                      ? 'Enter the code from your authenticator app' 
+                      : authForm === 'signup' 
+                      ? 'Verification helps prevent unauthorized searches and protects sensitive records.' 
+                      : 'Sign in to your Velour account'}
                   </p>
                 </div>
               </div>

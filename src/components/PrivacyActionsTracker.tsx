@@ -38,6 +38,11 @@ export default function PrivacyActionsTracker({
   const [showExplanation, setShowExplanation] = useState(true);
 
   async function handleUploadDocument(reqId: string) {
+    if (!isVerified) {
+      onShowNotice("Identity Verification Required: Please complete identity verification before uploading sensitive documentation.");
+      onOpenVerification();
+      return;
+    }
     if (!uploadDocName) {
       onShowNotice("Please specify a document label (e.g. State ID, Utility Bill).");
       return;
@@ -196,8 +201,15 @@ export default function PrivacyActionsTracker({
         </div>
 
         <button
-          onClick={() => setAddingRequest(!addingRequest)}
-          className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 text-xs font-bold rounded-xl transition flex items-center gap-1.5 shrink-0 shadow-sm"
+          onClick={() => {
+            if (!isVerified) {
+              onShowNotice("Identity Verification Required: Please complete identity verification before initiating a broker removal request.");
+              onOpenVerification();
+            } else {
+              setAddingRequest(!addingRequest);
+            }
+          }}
+          className="px-4 py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-950 text-xs font-bold rounded-xl transition flex items-center gap-1.5 shrink-0 shadow-sm cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           <span>New Removal Request</span>

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { User, BreachRecord, AuditLog, PaymentReceipt, EnterpriseClient, PrivacyRemovalRequest } from './src/types';
+import { User, BreachRecord, AuditLog, PaymentReceipt, EnterpriseClient, PrivacyRemovalRequest, PublicSafetyNotice } from './src/types';
 
 const STATE_FILE_PATH = path.join(process.cwd(), 'database-state.json');
 
@@ -12,6 +12,7 @@ interface DBState {
   payments: PaymentReceipt[];
   enterpriseClients: EnterpriseClient[];
   privacyRequests: PrivacyRemovalRequest[];
+  publicSafetyNotices: PublicSafetyNotice[];
 }
 
 // Helper to generate IDs
@@ -94,6 +95,7 @@ function generatePreseededData(): DBState {
       mfaEnabled: true,
       mfaBackupCode: 'BG-ADMIN-654876',
       isVerified: true,
+      verificationStatus: 'complete',
       subscriptionTier: 'enterprise',
       subscriptionActive: true,
       createdIP: '127.0.0.1',
@@ -107,6 +109,7 @@ function generatePreseededData(): DBState {
       mfaEnabled: true,
       mfaBackupCode: 'BG-AGENT-112233',
       isVerified: true,
+      verificationStatus: 'complete',
       subscriptionTier: 'pro',
       subscriptionActive: true,
       createdIP: '127.0.0.1',
@@ -120,6 +123,7 @@ function generatePreseededData(): DBState {
       mfaEnabled: true,
       mfaBackupCode: 'BG-OFFICER-445566',
       isVerified: true,
+      verificationStatus: 'complete',
       subscriptionTier: 'pro',
       subscriptionActive: true,
       createdIP: '127.0.0.1',
@@ -132,6 +136,7 @@ function generatePreseededData(): DBState {
       mfaEnabled: true,
       mfaBackupCode: 'BG-SAFE-988310',
       isVerified: false,
+      verificationStatus: 'unverified',
       idUploadedFiles: [],
       photoMatchCaptured: false,
       monitoringActive: true,
@@ -434,12 +439,96 @@ function generatePreseededData(): DBState {
     }
   ];
 
+  const preseededNotices: PublicSafetyNotice[] = [
+    {
+      id: 'notice_1',
+      type: 'community_alert',
+      status: 'verified_active',
+      title: 'Credential Stuffing Wave Against E-Commerce Portals',
+      content: 'Security operators have identified a coordinated credential stuffing wave utilizing leak data from Canva and Adobe. Users are strongly urged to ensure they do not reuse passwords across retail or banking platforms and to enable MFA immediately.',
+      reportedBy: 'officer@breachguard.gov',
+      createdAt: new Date(now.getTime() - 12 * 24 * 3600 * 1000).toISOString(),
+      updatedAt: new Date(now.getTime() - 12 * 24 * 3600 * 1000).toISOString(),
+      moderationLogs: [
+        {
+          action: 'Verified Active',
+          timestamp: new Date(now.getTime() - 12 * 24 * 3600 * 1000).toISOString(),
+          note: 'Case coordinates validated with registry integrity records.',
+          performedBy: 'admin@velour.io'
+        }
+      ]
+    },
+    {
+      id: 'notice_2',
+      type: 'missing_person',
+      status: 'verified_active',
+      title: 'Verified Missing Person Alert: Sarah Jenkins',
+      content: 'Sarah Jenkins was last seen in the Downtown Minneapolis area. She was walking near Nicollet Mall.',
+      reportedBy: 'mattjhagen0@gmail.com',
+      createdAt: new Date(now.getTime() - 2 * 24 * 3600 * 1000).toISOString(),
+      updatedAt: new Date(now.getTime() - 2 * 24 * 3600 * 1000).toISOString(),
+      photoBase64: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?q=80&w=400&h=400&fit=crop',
+      firstName: 'Sarah',
+      ageRange: '20-25',
+      height: '5\'6"',
+      hairColor: 'Brown',
+      eyeColor: 'Blue',
+      distinguishingFeatures: 'Small floral tattoo on left forearm.',
+      lastKnownRegion: 'Minneapolis, MN',
+      emergencyContact: 'Minneapolis Police Department Precinct or Dial 911',
+      policeReportNumber: 'MPD-2026-0098412',
+      agencyName: 'Minneapolis Police Department',
+      agencyVerificationNumber: '(612) 673-5700',
+      caseDocumentationName: 'Sarah_Jenkins_Active_Alert.pdf',
+      moderationLogs: [
+        {
+          action: 'Verified Active',
+          timestamp: new Date(now.getTime() - 2 * 24 * 3600 * 1000).toISOString(),
+          note: 'Minneapolis PD Precinct confirmed active missing person report #MPD-2026-0098412. Verification check complete.',
+          performedBy: 'admin@velour.io'
+        }
+      ]
+    },
+    {
+      id: 'notice_3',
+      type: 'missing_person',
+      status: 'pending_verification',
+      title: 'Pending Missing Person Notice: John Doe',
+      content: 'John Doe went missing on May 25th in Duluth, MN.',
+      reportedBy: 'mattjhagen0@gmail.com',
+      createdAt: new Date(now.getTime() - 4 * 3600 * 1000).toISOString(),
+      updatedAt: new Date(now.getTime() - 4 * 3600 * 1000).toISOString(),
+      photoBase64: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?q=80&w=400&h=400&fit=crop',
+      firstName: 'John',
+      ageRange: '30-35',
+      height: '6\'1"',
+      hairColor: 'Black',
+      eyeColor: 'Brown',
+      distinguishingFeatures: 'None',
+      lastKnownRegion: 'Duluth, MN',
+      emergencyContact: 'Duluth Police Department or Dial 911',
+      policeReportNumber: 'DPD-2026-98124',
+      agencyName: 'Duluth Police Department',
+      agencyVerificationNumber: '(218) 730-5400',
+      caseDocumentationName: 'John_Doe_Missing_Case.pdf',
+      moderationLogs: [
+        {
+          action: 'Pending Verification',
+          timestamp: new Date(now.getTime() - 4 * 3600 * 1000).toISOString(),
+          note: 'Submission received and placed in moderation queue.',
+          performedBy: 'system-ingest'
+        }
+      ]
+    }
+  ];
+
   return {
     users: defaultUsers,
     breachRecords: records,
     auditLogs: preseededLogs,
     payments: preseededPayments,
     enterpriseClients: preseededEnterprise,
-    privacyRequests: preseededRequests
+    privacyRequests: preseededRequests,
+    publicSafetyNotices: preseededNotices
   };
 }

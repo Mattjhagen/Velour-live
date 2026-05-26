@@ -10,6 +10,11 @@ export interface User {
   isVerified: boolean; // government ID + photo match verified
   idUploadedFiles?: { docName: string; uploadedAt: string }[];
   photoMatchCaptured?: boolean;
+  verificationStatus?: 'unverified' | 'pending' | 'reviewing' | 'complete' | 'failed' | 'additional_info';
+  verificationProvider?: 'stripe' | 'persona' | 'veriff' | 'onfido';
+  verificationSessionId?: string;
+  verificationSessionExpiresAt?: string;
+  verificationSessionError?: string;
   monitoringActive?: boolean;
   subscriptionTier: 'free' | 'pro' | 'enterprise';
   subscriptionActive: boolean;
@@ -100,5 +105,55 @@ export interface PrivacyRemovalRequest {
   updatedAt: string;
   screenshotCaptured?: boolean;
   verificationDocuments?: { docType: string; docName: string; uploadedAt: string }[];
+}
+
+export type SafetyNoticeStatus = 
+  | 'pending_verification' 
+  | 'agency_contacted' 
+  | 'verified_active' 
+  | 'additional_info' 
+  | 'rejected' 
+  | 'archived' 
+  | 'located_safe';
+
+export interface ModerationLogEntry {
+  action: string;
+  timestamp: string;
+  note?: string;
+  performedBy: string;
+}
+
+export interface PublicSafetyNotice {
+  id: string;
+  type: 'missing_person' | 'community_alert';
+  status: SafetyNoticeStatus;
+  
+  // Submission details (General)
+  title: string;
+  content: string;
+  reportedBy: string; // email of reporting user
+  createdAt: string;
+  updatedAt: string;
+
+  // Submission details (Missing Person specific)
+  photoBase64?: string;
+  firstName?: string;
+  ageRange?: string;
+  height?: string;
+  hairColor?: string;
+  eyeColor?: string;
+  distinguishingFeatures?: string;
+  lastKnownRegion?: string;
+  emergencyContact?: string;
+
+  // Verification details
+  policeReportNumber?: string;
+  agencyName?: string;
+  agencyVerificationNumber?: string;
+  caseDocumentationBase64?: string;
+  caseDocumentationName?: string;
+
+  // Moderation logs
+  moderationLogs?: ModerationLogEntry[];
 }
 

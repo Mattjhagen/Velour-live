@@ -6,7 +6,7 @@ import {
   Settings, Globe, Search, Award, MapPin, UserCheck, Download, 
   Sparkles, KeyRound, ArrowRight, HeartHandshake, Eye
 } from 'lucide-react';
-import { AuditLog, EnterpriseClient, PrivacyRemovalRequest, PrivacyRequestStatus } from '../types';
+import { AuditLog, EnterpriseClient, PrivacyRemovalRequest, PrivacyRequestStatus, PublicSafetyNotice } from '../types';
 
 interface AdminTelemetryDashboardProps {
   authToken: string;
@@ -51,12 +51,21 @@ export default function AdminTelemetryDashboard({ authToken, adminRole = 'super_
 
   // Active sub-tab in admin portal
   const defaultTab = adminRole === 'support_agent' ? 'privacy_requests' : 'metrics';
-  const [adminTab, setAdminTab] = useState<'metrics' | 'support' | 'privacy_requests' | 'enterprise'>(defaultTab as any);
+  const [adminTab, setAdminTab] = useState<'metrics' | 'support' | 'privacy_requests' | 'enterprise' | 'safety_notices'>(defaultTab as any);
   const [providerHealth, setProviderHealth] = useState<any[]>([]);
+
+  // Safety notices admin states
+  const [safetyNotices, setSafetyNotices] = useState<PublicSafetyNotice[]>([]);
+  const [loadingNotices, setLoadingNotices] = useState(false);
+  const [selectedNotice, setSelectedNotice] = useState<PublicSafetyNotice | null>(null);
+  const [statusUpdateNotice, setStatusUpdateNotice] = useState<string>('pending_verification');
+  const [noteUpdateNotice, setNoteUpdateNotice] = useState('');
+  const [noticeUpdateSuccess, setNoticeUpdateSuccess] = useState(false);
 
   useEffect(() => {
     fetchAdminData();
     fetchPrivacyRequests();
+    fetchSafetyNotices();
   }, [adminRole]);
 
   async function fetchAdminData() {
@@ -114,6 +123,52 @@ export default function AdminTelemetryDashboard({ authToken, adminRole = 'super_
       console.error(err);
     } finally {
       setLoadingRequests(false);
+    }
+  }
+
+  async function fetchSafetyNotices() {
+    setLoadingNotices(true);
+    try {
+      const res = await fetch('/api/admin/public-safety-notices', {
+        headers: { 'Authorization': `Bearer ${authToken}` }
+      });
+      const data = await res.json();
+      if (data.success) {
+        setSafetyNotices(data.notices);
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setLoadingNotices(false);
+    }
+  }
+
+  async function handleModerateNotice(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selectedNotice) return;
+    setNoticeUpdateSuccess(false);
+
+    try {
+      const res = await fetch(`/api/admin/public-safety-notices/${selectedNotice.id}/moderate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          status: statusUpdateNotice,
+          note: noteUpdateNotice
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        setNoticeUpdateSuccess(true);
+        setNoteUpdateNotice('');
+        setSelectedNotice(data.notice);
+        fetchSafetyNotices();
+      }
+    } catch (err) {
+      console.error(err);
     }
   }
 
@@ -314,6 +369,12 @@ export default function AdminTelemetryDashboard({ authToken, adminRole = 'super_
               >
                 Removals {privacyRequests.length > 0 && `(${privacyRequests.length})`}
               </button>
+              <button
+                onClick={() => setAdminTab('safety_notices')}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all ${adminTab === 'safety_notices' ? 'bg-zinc-805 text-zinc-100' : 'text-zinc-455 hover:text-zinc-200'}`}
+              >
+                Safety Notices {safetyNotices.filter(n => n.status === 'pending_verification').length > 0 && `(${safetyNotices.filter(n => n.status === 'pending_verification').length})`}
+              </button>
             </>
           )}
           {adminRole === 'super_admin' && (
@@ -470,7 +531,7 @@ export default function AdminTelemetryDashboard({ authToken, adminRole = 'super_
                 <span>Consent-Linked Support Access Desk</span>
               </h3>
               <p className="text-xs text-zinc-505 mt-1 leading-normal">
-                To prevent unauthorized search scans, looking up raw exposure files requires matching user verification, explicit client support consent, and a valid system case justification.
+                To prevent unauthorized search lookup, looking up raw exposure files requires matching user verification, explicit client support consent, and a valid system case justification.
               </p>
             </div>
 
@@ -972,6 +1033,274 @@ export default function AdminTelemetryDashboard({ authToken, adminRole = 'super_
           </form>
         </div>
       )}
+      {adminTab === 'safety_notices' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-in fade-in duration-200 text-left">
+          {/* Column 1 & 2: Notices list */}
+          <div className="lg:col-span-2 bg-zinc-900/40 border border-zinc-850/60 rounded-2xl p-6 sm:p-8 space-y-4">
+            <div className="border-b border-zinc-850 pb-4 flex justify-between items-center">
+              <div>
+                <h3 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+                  <ShieldAlert className="w-4 h-4 text-zinc-405" />
+                  <span>Verified Community Safety Notices Moderation Ledger</span>
+                </h3>
+                <p className="text-xs text-zinc-500 mt-1">Review active, pending, and resolved community alerts and missing person awareness alerts.</p>
+              </div>
+              <button 
+                type="button"
+                onClick={fetchSafetyNotices}
+                disabled={loadingNotices}
+                className="px-3 py-1 bg-zinc-800 hover:bg-zinc-750 text-zinc-300 border border-zinc-700 text-[11px] rounded-lg transition flex items-center gap-1 cursor-pointer"
+              >
+                <RefreshCw className={`w-3 h-3 ${loadingNotices ? 'animate-spin' : ''}`} />
+                <span>Refresh Notices</span>
+              </button>
+            </div>
+
+            {loadingNotices ? (
+              <div className="text-center py-20 text-xs font-mono text-zinc-500">
+                <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-zinc-500" />
+                Loading bulletins ledger...
+              </div>
+            ) : safetyNotices.length === 0 ? (
+              <div className="text-center py-16 text-xs text-zinc-500 italic">
+                No safety notices registered in the database.
+              </div>
+            ) : (
+              <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2 scrollbar-thin">
+                {safetyNotices.map((notice) => {
+                  const isSelected = selectedNotice?.id === notice.id;
+                  return (
+                    <div 
+                      key={notice.id}
+                      onClick={() => {
+                        setSelectedNotice(notice);
+                        setStatusUpdateNotice(notice.status);
+                        setNoticeUpdateSuccess(false);
+                        setNoteUpdateNotice('');
+                      }}
+                      className={`p-4 rounded-xl border transition cursor-pointer text-left ${
+                        isSelected 
+                          ? 'bg-zinc-800 border-zinc-700' 
+                          : 'bg-zinc-950/40 border-zinc-900/60 hover:border-zinc-800'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between gap-3 mb-2 flex-wrap">
+                        <span className="text-[10px] font-mono font-semibold tracking-wider text-zinc-500 uppercase">
+                          {notice.type.replace('_', ' ')}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded text-[9px] font-semibold border leading-none capitalize ${
+                          notice.status === 'verified_active' 
+                            ? 'bg-emerald-955/20 text-emerald-400 border-emerald-900/30' 
+                            : notice.status === 'located_safe'
+                            ? 'bg-blue-955/20 text-blue-400 border-blue-900/30'
+                            : notice.status === 'agency_contacted'
+                            ? 'bg-indigo-955/20 text-indigo-400 border-indigo-900/30'
+                            : notice.status === 'pending_verification'
+                            ? 'bg-amber-955/20 text-amber-500 border-amber-900/30 animate-pulse'
+                            : 'bg-zinc-955 text-zinc-400 border-zinc-800'
+                        }`}>
+                          {notice.status.replace('_', ' ')}
+                        </span>
+                      </div>
+                      <h4 className="text-xs font-semibold text-zinc-205">{notice.title}</h4>
+                      <p className="text-[10.5px] text-zinc-400 mt-1 leading-normal truncate">{notice.content}</p>
+                      <div className="text-[9.5px] text-zinc-500 font-mono mt-3 border-t border-zinc-900 pt-2 flex justify-between">
+                        <span>Reported By: {notice.reportedBy}</span>
+                        <span>{new Date(notice.createdAt).toLocaleString()}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Column 3: Notice Inspector & Action Form */}
+          <div className="bg-zinc-900/40 border border-zinc-850/60 rounded-2xl p-6 sm:p-8 space-y-4">
+            <div className="border-b border-zinc-850 pb-4 text-left">
+              <h3 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
+                <Settings className="w-4 h-4 text-zinc-400" />
+                <span>Notice Inspector</span>
+              </h3>
+              <p className="text-xs text-zinc-500 mt-1">Review missing person descriptors, police verification files, and log status updates.</p>
+            </div>
+
+            {selectedNotice ? (
+              <div className="space-y-4 text-xs font-sans">
+                {/* Descriptors details if missing person */}
+                <div className="bg-zinc-950 p-4 rounded-xl border border-zinc-900 space-y-3">
+                  <span className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest block border-b border-zinc-900 pb-1.5">
+                    Notice Specifications
+                  </span>
+                  
+                  {selectedNotice.photoBase64 && (
+                    <div className="mb-3 max-w-[120px] mx-auto rounded-lg overflow-hidden border border-zinc-800">
+                      <img 
+                        src={selectedNotice.photoBase64} 
+                        alt="Submitted capture" 
+                        className="w-full h-auto object-cover max-h-[120px]"
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-2 text-[10.5px]">
+                    <div>
+                      <span className="text-zinc-500">Notice Type:</span>
+                      <span className="text-zinc-200 font-semibold block capitalize">{selectedNotice.type.replace('_', ' ')}</span>
+                    </div>
+                    {selectedNotice.type === 'missing_person' && (
+                      <>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-zinc-500">First Name:</span>
+                            <span className="text-zinc-200 font-semibold block">{selectedNotice.firstName}</span>
+                          </div>
+                          <div>
+                            <span className="text-zinc-500">Age Range:</span>
+                            <span className="text-zinc-200 font-semibold block">{selectedNotice.ageRange}</span>
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <span className="text-zinc-500">Height:</span>
+                            <span className="text-zinc-200 font-semibold block">{selectedNotice.height}</span>
+                          </div>
+                          <div>
+                            <span className="text-zinc-500">Hair / Eyes:</span>
+                            <span className="text-zinc-200 font-semibold block">{selectedNotice.hairColor} / {selectedNotice.eyeColor}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500">Distinguishing Features:</span>
+                          <span className="text-zinc-200 block leading-relaxed">{selectedNotice.distinguishingFeatures || 'None'}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500">Last Known Region:</span>
+                          <span className="text-zinc-200 font-medium block">{selectedNotice.lastKnownRegion}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500">Emergency Contact:</span>
+                          <span className="text-zinc-200 font-semibold block">{selectedNotice.emergencyContact}</span>
+                        </div>
+                      </>
+                    )}
+                    {selectedNotice.type === 'community_alert' && (
+                      <div>
+                        <span className="text-zinc-500">Content Description:</span>
+                        <p className="text-zinc-300 leading-relaxed mt-0.5">{selectedNotice.content}</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Law Enforcement Verification Info */}
+                {selectedNotice.type === 'missing_person' && (
+                  <div className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-900 space-y-2">
+                    <span className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest block border-b border-zinc-900 pb-1.5">
+                      Law Enforcement Verification
+                    </span>
+                    <div className="space-y-1.5 text-[10.5px]">
+                      <div>
+                        <span className="text-zinc-500 block">Agency Name:</span>
+                        <span className="text-zinc-200 font-semibold">{selectedNotice.agencyName}</span>
+                      </div>
+                      <div>
+                        <span className="text-zinc-500 block">Police Report #:</span>
+                        <span className="text-zinc-200 font-semibold font-mono">{selectedNotice.policeReportNumber}</span>
+                      </div>
+                      <div>
+                        <span className="text-zinc-500 block">Verification Non-Emergency Phone:</span>
+                        <span className="text-zinc-200 font-semibold font-mono">{selectedNotice.agencyVerificationNumber}</span>
+                      </div>
+                      {selectedNotice.caseDocumentationName && (
+                        <div className="flex items-center gap-1.5 text-indigo-400 mt-1">
+                          <FileText className="w-3.5 h-3.5" />
+                          <span className="font-semibold block truncate max-w-[200px]">{selectedNotice.caseDocumentationName}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Moderation History Logs */}
+                <div className="bg-zinc-955 p-4 rounded-xl border border-zinc-900 space-y-2">
+                  <span className="text-[10px] font-mono font-bold text-zinc-500 uppercase tracking-widest block">
+                    Case Moderation History
+                  </span>
+                  <div className="space-y-2 max-h-[140px] overflow-y-auto pr-1">
+                    {selectedNotice.moderationLogs && selectedNotice.moderationLogs.length > 0 ? (
+                      selectedNotice.moderationLogs.map((log, idx) => (
+                        <div key={idx} className="border-b border-zinc-900/60 pb-1.5 text-[10px] space-y-0.5 text-left">
+                          <div className="flex justify-between font-mono text-[9px]">
+                            <span className="font-bold text-zinc-400">{log.action}</span>
+                            <span className="text-zinc-600">{new Date(log.timestamp).toLocaleDateString()}</span>
+                          </div>
+                          {log.note && <p className="text-zinc-500 font-sans italic leading-normal">{log.note}</p>}
+                          <span className="text-zinc-600 font-mono text-[8px] block">By: {log.performedBy}</span>
+                        </div>
+                      ))
+                    ) : (
+                      <span className="text-zinc-600 italic block">No moderation logs active on notice.</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Moderate Action Form */}
+                <form onSubmit={handleModerateNotice} className="p-4 bg-zinc-950/30 border border-zinc-800 rounded-xl space-y-4">
+                  <span className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block font-mono">Moderate Case file</span>
+                  <div>
+                    <label className="text-[9px] font-semibold text-zinc-500 uppercase tracking-wider block mb-1 font-mono">Mod Status Status</label>
+                    <select
+                      value={statusUpdateNotice}
+                      onChange={(e) => setStatusUpdateNotice(e.target.value as any)}
+                      className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2 text-xs text-zinc-200 focus:outline-none"
+                    >
+                      <option value="pending_verification">Pending Verification</option>
+                      <option value="agency_contacted">Agency Contacted</option>
+                      <option value="verified_active">Verified Active (Publish Notice)</option>
+                      <option value="additional_info">Additional Info Requested</option>
+                      <option value="rejected">Rejected (Discard Notice)</option>
+                      <option value="archived">Archived (Un-publish notice)</option>
+                      <option value="located_safe">Located Safe (Resolved state)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-[9px] font-semibold text-zinc-500 uppercase tracking-wider block mb-1 font-mono">Compliance Audit Note</label>
+                    <textarea
+                      placeholder="Enter verification details, e.g. 'Precinct contacted. Confirmed active missing person report.'"
+                      required
+                      value={noteUpdateNotice}
+                      onChange={(e) => setNoteUpdateNotice(e.target.value)}
+                      rows={2}
+                      className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2 text-xs text-zinc-200 focus:outline-none placeholder-zinc-700"
+                    />
+                  </div>
+
+                  {noticeUpdateSuccess && (
+                    <div className="p-2.5 bg-zinc-950 text-emerald-400 border border-emerald-900/35 rounded-lg text-[10.5px] font-sans flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Moderation update committed.
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    className="w-full py-2 bg-zinc-100 hover:bg-zinc-200 text-zinc-955 font-bold rounded-lg text-xs transition cursor-pointer"
+                  >
+                    Commit Moderation Status
+                  </button>
+                </form>
+              </div>
+            ) : (
+              <div className="text-center py-20 text-zinc-650 italic">
+                Select a safety notice from the ledger to inspect case details and perform moderation.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      {/* Footer close tag spacing */}
 
 
     </div>

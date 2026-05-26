@@ -298,6 +298,33 @@ app.post('/api/auth/logout', (req, res) => {
   res.json({ success: true, message: 'Safely disconnected sessions' });
 });
 
+// Helper to check verification session expiration (15 min TTL)
+function checkVerificationSessionTTL(user: any, ip: string, fingerprint: string): boolean {
+  if (user.verificationSessionExpiresAt && new Date(user.verificationSessionExpiresAt) < new Date()) {
+    if (user.verificationStatus !== 'complete') {
+      user.verificationStatus = 'unverified';
+      user.verificationProvider = undefined;
+      user.verificationSessionId = undefined;
+      user.verificationSessionExpiresAt = undefined;
+      user.verificationSessionError = undefined;
+      user.idUploadedFiles = [];
+      user.photoMatchCaptured = false;
+      user.isVerified = false;
+      logSecurityEvent(
+        user.id,
+        user.email,
+        'IDENTITY_SESSION_EXPIRED',
+        'warning',
+        ip,
+        fingerprint,
+        `Verification session expired automatically due to TTL (15 minute expiration).`
+      );
+      return true; // DB was updated and should be saved
+    }
+  }
+  return false;
+}
+
 app.get('/api/auth/me', (req, res) => {
   const session = getSession(req);
   if (!session) {
@@ -308,6 +335,12 @@ app.get('/api/auth/me', (req, res) => {
   if (!user) {
     return res.status(404).json({ error: 'User does not exist.' });
   }
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  if (checkVerificationSessionTTL(user, ip, session.fingerprint)) {
+    saveDB(db);
+  }
+
   res.json({
     success: true,
     user: {
@@ -318,6 +351,11 @@ app.get('/api/auth/me', (req, res) => {
       isVerified: user.isVerified,
       idUploadedFiles: user.idUploadedFiles,
       photoMatchCaptured: user.photoMatchCaptured,
+      verificationStatus: user.verificationStatus ?? 'unverified',
+      verificationProvider: user.verificationProvider,
+      verificationSessionId: user.verificationSessionId,
+      verificationSessionExpiresAt: user.verificationSessionExpiresAt,
+      verificationSessionError: user.verificationSessionError,
       monitoringActive: user.monitoringActive ?? true,
       subscriptionTier: user.subscriptionTier,
       subscriptionActive: user.subscriptionActive,
@@ -553,6 +591,11 @@ app.post('/api/user/purge-verification-assets', (req, res) => {
   user.idUploadedFiles = [];
   user.photoMatchCaptured = false;
   user.isVerified = false; // Reset verified flag since verification assets are purged
+  user.verificationStatus = 'unverified';
+  user.verificationProvider = undefined;
+  user.verificationSessionId = undefined;
+  user.verificationSessionExpiresAt = undefined;
+  user.verificationSessionError = undefined;
   saveDB(db);
 
   const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
@@ -597,33 +640,103 @@ app.post('/api/user/toggle-monitoring', (req, res) => {
 });
 
 // 2. Identity Verification (Simulating Gov ID + Photo Match Review)
-app.post('/api/verify/id-upload', (req, res) => {
+// 2. Progressive Identity Verification (Simulating Gov ID + Photo Match Review via Third-Party Providers)
+app.post('/api/verify/session/create', (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
-  const { docType, docName, base64File } = req.body;
-  if (!docType || !docName) {
-    return res.status(400).json({ error: 'Invalid identification parameters.' });
+  const { provider } = req.body;
+  if (!provider || !['stripe', 'persona', 'veriff', 'onfido'].includes(provider)) {
+    return res.status(400).json({ error: 'Valid third-party verification provider selection is required.' });
   }
 
   const db = loadDB();
   const user = db.users.find(u => u.id === session.userId);
   if (!user) return res.status(404).json({ error: 'Subject not found.' });
 
-  if (!user.idUploadedFiles) user.idUploadedFiles = [];
-  user.idUploadedFiles.push({
-    docName: `${docType.toUpperCase()}: ${docName}`,
-    uploadedAt: new Date().toISOString()
-  });
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
 
-  // Automatically check if photo match is also completed, to trigger absolute verification validation
-  if (user.photoMatchCaptured) {
-    user.isVerified = true;
+  // Session TTL is 15 minutes
+  const ttlMs = 15 * 60 * 1000;
+  const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+
+  user.verificationStatus = 'pending';
+  user.verificationProvider = provider;
+  user.verificationSessionId = `sess_${provider}_${Math.random().toString(36).substring(2, 11)}`;
+  user.verificationSessionExpiresAt = expiresAt;
+  user.verificationSessionError = undefined;
+  user.idUploadedFiles = [];
+  user.photoMatchCaptured = false;
+  user.isVerified = false;
+
+  saveDB(db);
+
+  logSecurityEvent(
+    user.id,
+    user.email,
+    'IDENTITY_SESSION_CREATED',
+    'success',
+    ip,
+    session.fingerprint,
+    `Created short-lived verification session with ${provider}. Expires at: ${expiresAt}`
+  );
+
+  res.json({
+    success: true,
+    verificationStatus: user.verificationStatus,
+    verificationProvider: user.verificationProvider,
+    verificationSessionId: user.verificationSessionId,
+    verificationSessionExpiresAt: user.verificationSessionExpiresAt
+  });
+});
+
+app.post('/api/verify/session/upload', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const db = loadDB();
+  const user = db.users.find(u => u.id === session.userId);
+  if (!user) return res.status(404).json({ error: 'Subject not found.' });
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+
+  // Check TTL
+  if (checkVerificationSessionTTL(user, ip, session.fingerprint)) {
+    saveDB(db);
+    return res.status(400).json({ error: 'Verification session has expired. Please start a new session.' });
+  }
+
+  const { docType, frontBase64, backBase64 } = req.body;
+  if (!docType || !['driver_license', 'state_id', 'passport'].includes(docType)) {
+    return res.status(400).json({ error: 'Invalid or unsupported government-issued ID type.' });
+  }
+
+  if (!frontBase64 || (docType !== 'passport' && !backBase64)) {
+    return res.status(400).json({ error: 'Front and back ID document file uploads are required.' });
+  }
+
+  if (user.verificationStatus !== 'pending') {
+    return res.status(400).json({ error: 'No active pending verification session.' });
+  }
+
+  // Update status to reviewing
+  user.verificationStatus = 'reviewing';
+  user.idUploadedFiles = [
+    {
+      docName: `${docType.toUpperCase()} (Front) - Provider Sandbox [${user.verificationProvider}]`,
+      uploadedAt: new Date().toISOString()
+    }
+  ];
+
+  if (docType !== 'passport') {
+    user.idUploadedFiles.push({
+      docName: `${docType.toUpperCase()} (Back) - Provider Sandbox [${user.verificationProvider}]`,
+      uploadedAt: new Date().toISOString()
+    });
   }
 
   saveDB(db);
 
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
   logSecurityEvent(
     user.id,
     user.email,
@@ -631,52 +744,153 @@ app.post('/api/verify/id-upload', (req, res) => {
     'success',
     ip,
     session.fingerprint,
-    `Received document upload [${docType}]. In-memory check succeeded. Waiting for Photo Match Verification.`
+    `Received ID document (${docType}) front and back uploads for ${user.verificationProvider}. Verification state: Reviewing.`
   );
 
   res.json({
     success: true,
-    isVerified: user.isVerified,
-    message: 'Government identity document metadata registered ephemerally in compliance vault.'
+    verificationStatus: user.verificationStatus,
+    idUploadedFiles: user.idUploadedFiles
   });
 });
 
-app.post('/api/verify/photo-match', (req, res) => {
+app.post('/api/verify/session/match', (req, res) => {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
+  const db = loadDB();
+  const user = db.users.find(u => u.id === session.userId);
+  if (!user) return res.status(404).json({ error: 'Subject not found.' });
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+
+  // Check TTL
+  if (checkVerificationSessionTTL(user, ip, session.fingerprint)) {
+    saveDB(db);
+    return res.status(400).json({ error: 'Verification session has expired. Please start a new session.' });
+  }
+
   const { photoMatchPassed } = req.body;
-  if (!photoMatchPassed) {
-    return res.status(400).json({ error: 'Photo Match Verification failed.' });
+
+  if (photoMatchPassed) {
+    user.photoMatchCaptured = true;
+    user.verificationStatus = 'complete';
+    user.isVerified = true;
+
+    saveDB(db);
+
+    logSecurityEvent(
+      user.id,
+      user.email,
+      'IDENTITY_VERIFICATION_COMPLETE',
+      'success',
+      ip,
+      session.fingerprint,
+      `Ownership Verification / Photo Match completed successfully with ${user.verificationProvider}. User is fully verified.`
+    );
+  } else {
+    user.photoMatchCaptured = false;
+    user.verificationStatus = 'failed';
+    user.verificationSessionError = 'Liveness check failed. Match credentials do not align with identification documents.';
+    user.isVerified = false;
+
+    saveDB(db);
+
+    logSecurityEvent(
+      user.id,
+      user.email,
+      'IDENTITY_VERIFICATION_FAILED',
+      'warning',
+      ip,
+      session.fingerprint,
+      `Photo Match / Liveness check failed using ${user.verificationProvider}.`
+    );
+  }
+
+  res.json({
+    success: true,
+    verificationStatus: user.verificationStatus,
+    isVerified: user.isVerified,
+    error: user.verificationSessionError
+  });
+});
+
+app.get('/api/verify/session/status', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const db = loadDB();
+  const user = db.users.find(u => u.id === session.userId);
+  if (!user) return res.status(404).json({ error: 'Subject not found.' });
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  checkVerificationSessionTTL(user, ip, session.fingerprint);
+
+  res.json({
+    success: true,
+    verificationStatus: user.verificationStatus ?? 'unverified',
+    verificationProvider: user.verificationProvider,
+    verificationSessionId: user.verificationSessionId,
+    verificationSessionExpiresAt: user.verificationSessionExpiresAt,
+    verificationSessionError: user.verificationSessionError,
+    isVerified: user.isVerified
+  });
+});
+
+app.post('/api/verify/session/simulate-status', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { status, errorMsg } = req.body;
+  if (!status || !['unverified', 'pending', 'reviewing', 'complete', 'failed', 'additional_info'].includes(status)) {
+    return res.status(400).json({ error: 'Invalid verification status for simulation.' });
   }
 
   const db = loadDB();
   const user = db.users.find(u => u.id === session.userId);
   if (!user) return res.status(404).json({ error: 'Subject not found.' });
 
-  user.photoMatchCaptured = true;
-  // If document was also provided, complete verified user activation
-  if (user.idUploadedFiles && user.idUploadedFiles.length > 0) {
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+
+  user.verificationStatus = status;
+  user.verificationSessionError = errorMsg;
+  
+  if (status === 'complete') {
     user.isVerified = true;
+    user.photoMatchCaptured = true;
+    if (!user.idUploadedFiles || user.idUploadedFiles.length === 0) {
+      user.idUploadedFiles = [
+        {
+          docName: `DRIVER LICENSE (Front) - Provider Sandbox [${user.verificationProvider || 'stripe'}]`,
+          uploadedAt: new Date().toISOString()
+        },
+        {
+          docName: `DRIVER LICENSE (Back) - Provider Sandbox [${user.verificationProvider || 'stripe'}]`,
+          uploadedAt: new Date().toISOString()
+        }
+      ];
+    }
+  } else {
+    user.isVerified = false;
   }
 
   saveDB(db);
 
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
   logSecurityEvent(
     user.id,
     user.email,
-    'PHOTO_MATCH_VERIFIED',
+    'IDENTITY_SIMULATION_UPDATED',
     'success',
     ip,
     session.fingerprint,
-    `Photo match verification check completed. Identity verified state: ${user.isVerified}`
+    `Developer simulated status update to [${status}].`
   );
 
   res.json({
     success: true,
+    verificationStatus: user.verificationStatus,
     isVerified: user.isVerified,
-    message: 'Photo Match Verification completed. Temporary matching parameters destroyed.'
+    error: user.verificationSessionError
   });
 });
 
@@ -1169,6 +1383,10 @@ app.post('/api/billing/checkout', (req, res) => {
   const user = db.users.find(u => u.id === session.userId);
   if (!user) return res.status(404).json({ error: 'Subject not found.' });
 
+  if (!user.isVerified) {
+    return res.status(403).json({ error: 'Identity Verification Required: Please complete identity verification before accessing premium workflows and checking out.' });
+  }
+
   const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
 
   // Safeguard: Reject prepaid debit cards where possible (PCI-Compliant billing audit simulation)
@@ -1323,6 +1541,13 @@ app.post('/api/privacy-requests', (req, res) => {
   }
 
   const db = loadDB();
+  const user = db.users.find(u => u.id === session.userId);
+  if (!user) return res.status(404).json({ error: 'Subject not found.' });
+
+  if (!user.isVerified) {
+    return res.status(403).json({ error: 'Identity Verification Required: Please complete identity verification before initiating a broker removal request.' });
+  }
+
   if (!db.privacyRequests) db.privacyRequests = [];
 
   const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
@@ -1369,6 +1594,13 @@ app.post('/api/privacy-requests/:id/upload', (req, res) => {
   }
 
   const db = loadDB();
+  const user = db.users.find(u => u.id === session.userId);
+  if (!user) return res.status(404).json({ error: 'Subject not found.' });
+
+  if (!user.isVerified) {
+    return res.status(403).json({ error: 'Identity Verification Required: Please complete identity verification before uploading supporting documentation.' });
+  }
+
   const request = db.privacyRequests?.find(r => r.id === req.params.id);
   if (!request) return res.status(404).json({ error: 'Privacy request not found.' });
 
@@ -1406,6 +1638,199 @@ app.post('/api/privacy-requests/:id/upload', (req, res) => {
   );
 
   res.json({ success: true, request });
+});
+
+// Notice automatic lifecycle management (Auto-review/archive after 30 days)
+function processNoticesLifecycle(db: any): boolean {
+  const now = new Date();
+  let dbChanged = false;
+  if (!db.publicSafetyNotices) {
+    db.publicSafetyNotices = [];
+    return false;
+  }
+
+  db.publicSafetyNotices.forEach((notice: any) => {
+    // If active and older than 30 days since last update, automatically archive
+    const activeDate = notice.updatedAt ? new Date(notice.updatedAt) : new Date(notice.createdAt);
+    const ageInDays = (now.getTime() - activeDate.getTime()) / (1000 * 3600 * 24);
+    
+    if (notice.status === 'verified_active' && ageInDays > 30) {
+      notice.status = 'archived';
+      notice.updatedAt = now.toISOString();
+      if (!notice.moderationLogs) notice.moderationLogs = [];
+      notice.moderationLogs.push({
+        action: 'System Auto-Archive',
+        timestamp: now.toISOString(),
+        note: 'Notice automatically archived after 30 days of active listing due to inactivity lifecycle policy.',
+        performedBy: 'system-lifecycle-daemon'
+      });
+      dbChanged = true;
+    }
+  });
+
+  return dbChanged;
+}
+
+// 6.6 PUBLIC SAFETY NOTICES ENDPOINTS
+app.get('/api/public-safety-notices', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const db = loadDB();
+  const dbChanged = processNoticesLifecycle(db);
+  if (dbChanged) {
+    saveDB(db);
+  }
+
+  // Only verified active and located safe alerts are public
+  const visibleNotices = (db.publicSafetyNotices || []).filter(
+    (n: any) => n.status === 'verified_active' || n.status === 'located_safe'
+  );
+  res.json({ success: true, notices: visibleNotices });
+});
+
+app.post('/api/public-safety-notices', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { 
+    type, title, content, 
+    photoBase64, firstName, ageRange, height, hairColor, eyeColor, distinguishingFeatures, lastKnownRegion, emergencyContact,
+    policeReportNumber, agencyName, agencyVerificationNumber, caseDocumentationBase64, caseDocumentationName 
+  } = req.body;
+
+  if (!type || !['missing_person', 'community_alert'].includes(type)) {
+    return res.status(400).json({ error: 'Valid safety notice type selection is required.' });
+  }
+
+  if (type === 'missing_person') {
+    if (!firstName || !ageRange || !height || !lastKnownRegion || !emergencyContact || !policeReportNumber || !agencyName || !agencyVerificationNumber) {
+      return res.status(400).json({ error: 'Missing person details, police report, and agency verification contact details are required.' });
+    }
+  } else {
+    if (!title || !content) {
+      return res.status(400).json({ error: 'Notice title and content are required.' });
+    }
+  }
+
+  const db = loadDB();
+  const user = db.users.find(u => u.id === session.userId);
+  if (!user) return res.status(404).json({ error: 'Subject not found.' });
+
+  if (!user.isVerified) {
+    return res.status(403).json({ error: 'Identity Verification Required: Please complete identity verification before submitting public safety notices.' });
+  }
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  
+  const newNotice = {
+    id: `notice_${Math.random().toString(36).substring(2, 11)}`,
+    type,
+    status: 'pending_verification' as const,
+    title: type === 'missing_person' ? `Verified Missing Person Alert: ${firstName}` : title,
+    content: type === 'missing_person' ? `Active missing person alert for ${firstName}. Last seen in ${lastKnownRegion}.` : content,
+    reportedBy: user.email,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    
+    // Missing person details
+    photoBase64,
+    firstName,
+    ageRange,
+    height,
+    hairColor,
+    eyeColor,
+    distinguishingFeatures,
+    lastKnownRegion,
+    emergencyContact,
+
+    // Verification
+    policeReportNumber,
+    agencyName,
+    agencyVerificationNumber,
+    caseDocumentationBase64,
+    caseDocumentationName,
+
+    moderationLogs: [
+      {
+        action: 'Pending Verification',
+        timestamp: new Date().toISOString(),
+        note: 'Safety notice submitted and queued for manual verification review.',
+        performedBy: 'system-ingest'
+      }
+    ]
+  };
+
+  if (!db.publicSafetyNotices) db.publicSafetyNotices = [];
+  db.publicSafetyNotices.unshift(newNotice);
+  saveDB(db);
+
+  logSecurityEvent(
+    user.id,
+    user.email,
+    'PUBLIC_SAFETY_NOTICE_SUBMITTED',
+    'success',
+    ip,
+    session.fingerprint,
+    `Submitted safety notice for review: ${newNotice.title} (${type})`
+  );
+
+  res.json({ success: true, notice: newNotice });
+});
+
+// Admin list of all safety notices
+app.get('/api/admin/public-safety-notices', (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin' || (session.adminRole !== 'super_admin' && session.adminRole !== 'support_agent' && session.adminRole !== 'compliance_officer')) {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks support operations role.' });
+  }
+
+  const db = loadDB();
+  processNoticesLifecycle(db);
+  res.json({ success: true, notices: db.publicSafetyNotices || [] });
+});
+
+// Admin moderate safety notice
+app.post('/api/admin/public-safety-notices/:id/moderate', (req, res) => {
+  const session = getSession(req);
+  if (!session || session.role !== 'admin' || (session.adminRole !== 'super_admin' && session.adminRole !== 'support_agent')) {
+    return res.status(403).json({ error: 'Access Restrained: Requester lacks support operations role.' });
+  }
+
+  const { status, note } = req.body;
+  if (!status || !['pending_verification', 'agency_contacted', 'verified_active', 'additional_info', 'rejected', 'archived', 'located_safe'].includes(status)) {
+    return res.status(400).json({ error: 'Valid safety notice status is required.' });
+  }
+
+  const db = loadDB();
+  const notice = db.publicSafetyNotices?.find((n: any) => n.id === req.params.id);
+  if (!notice) return res.status(404).json({ error: 'Safety notice not found.' });
+
+  notice.status = status;
+  notice.updatedAt = new Date().toISOString();
+
+  if (!notice.moderationLogs) notice.moderationLogs = [];
+  notice.moderationLogs.push({
+    action: status.split('_').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+    timestamp: new Date().toISOString(),
+    note: note || `Moderator updated status to: ${status}`,
+    performedBy: session.email
+  });
+
+  saveDB(db);
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  logSecurityEvent(
+    session.userId,
+    session.email,
+    'PUBLIC_SAFETY_NOTICE_MODERATED',
+    'success',
+    ip,
+    session.fingerprint,
+    `Admin set safety notice ID: ${notice.id} status to: ${status}. Performance Notes: ${note || 'None'}`
+  );
+
+  res.json({ success: true, notice });
 });
 
 app.get('/api/admin/privacy-requests', (req, res) => {
