@@ -714,7 +714,7 @@ app.get('/api/exposure/search', async (req, res) => {
   }
   lastSearchTimestamps.set(session.userId, now);
 
-  const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
 
   // Geographic Anomaly & Threat/Fraud Scoring Check
   let fraudScore = 15;
@@ -764,7 +764,6 @@ app.get('/api/exposure/search', async (req, res) => {
   // Safeguard: users can only search their own credentials/emails unless they are admin.
   // We allow standard searches, but if they enter an email that does not match their session email,
   // we strictly output empty mock results and raise an audit warning.
-  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
 
   if (normalizedQuery !== userOwnEmail && user.role !== 'admin') {
     logSecurityEvent(
@@ -839,6 +838,179 @@ app.get('/api/exposure/search', async (req, res) => {
     isVerifiedUser: user.isVerified,
     queriedTarget: query,
     providerHealth: ProviderHealthRegistry.getHealth()
+  });
+});
+
+// GET /api/exposure/free-preview (Public unauthenticated preview endpoint)
+app.get('/api/exposure/free-preview', async (req, res) => {
+  const type = (req.query.type as string || 'email').trim().toLowerCase();
+  const value = (req.query.value as string || '').trim();
+  const zip = (req.query.zip as string || '').trim();
+  const dob = (req.query.dob as string || '').trim();
+
+  if (!value) {
+    return res.status(400).json({ error: 'Search identifier query value is required.' });
+  }
+
+  // Helper to check if it matches preseeded demo user
+  const isDemoEmail = type === 'email' && value.toLowerCase() === 'mattjhagen0@gmail.com';
+  const isDemoUsername = type === 'username' && value.toLowerCase() === 'mattjh';
+  
+  // Normalize phone matching
+  const cleanPhone = value.replace(/\D/g, '');
+  const isDemoPhone = type === 'phone' && (cleanPhone === '6125551290' || cleanPhone === '16125551290');
+  
+  const isDemoNameZip = type === 'name_zip' && value.toLowerCase() === 'hagen' && zip === '55401';
+
+  const isDemoMatch = isDemoEmail || isDemoUsername || isDemoPhone || isDemoNameZip;
+
+  if (isDemoMatch) {
+    // Return preseeded breach records for the demo user
+    const db = loadDB();
+    const demoEmail = 'mattjhagen0@gmail.com';
+    const demoBreaches = db.breachRecords.filter(r => r.email === demoEmail);
+    const maskedBreaches = demoBreaches.map(record => ({
+      id: record.id,
+      source: record.source,
+      reworkDate: record.reworkDate,
+      breachName: record.breachName,
+      description: record.description,
+      compromisedData: record.compromisedData,
+      riskScore: record.riskScore,
+      category: record.category,
+      details: record.leakDetailsMasked,
+      isVerifiedView: false
+    }));
+
+    return res.json({
+      success: true,
+      results: maskedBreaches,
+      queriedTarget: value,
+      isVerifiedUser: false
+    });
+  }
+
+  // Generate personalized mock results
+  const results: any[] = [];
+  const now = new Date();
+
+  // Helper to mask emails
+  const maskEmailStr = (em: string) => {
+    const parts = em.split('@');
+    if (parts.length < 2) return 'ex*****@domain.com';
+    const name = parts[0];
+    const domain = parts[1];
+    if (name.length <= 2) return `${name.substring(0, 1)}*@${domain}`;
+    return `${name.substring(0, 2)}*****${name.substring(name.length - 1)}@${domain}`;
+  };
+
+  // Helper to mask name
+  const maskNameStr = (lastName: string) => {
+    if (lastName.length <= 2) return `M*** ${lastName}`;
+    return `Ma*** J*** ${lastName}`;
+  };
+
+  // 1. National Public Data (2024) - PII Exposure
+  let ssnSuffix = Math.floor(10 + Math.random() * 90).toString();
+  let cityState = 'Omaha, NE';
+  if (type === 'name_zip' && zip) {
+    const prefix = zip.substring(0, 2);
+    if (['94', '95'].includes(prefix)) cityState = 'San Francisco, CA';
+    else if (['10', '11'].includes(prefix)) cityState = 'New York, NY';
+    else if (['60', '61'].includes(prefix)) cityState = 'Chicago, IL';
+    else if (['55', '56'].includes(prefix)) cityState = 'Minneapolis, MN';
+    else if (['75', '76'].includes(prefix)) cityState = 'Dallas, TX';
+    else if (['30', '31'].includes(prefix)) cityState = 'Atlanta, GA';
+    else cityState = `Location ID: ${zip}`;
+  }
+
+  let formattedDob = '05/**/19**';
+  if (dob) {
+    if (dob.length === 4 && !isNaN(Number(dob))) {
+      formattedDob = `**/**/${dob}`;
+    } else {
+      formattedDob = `**/**/19${dob.substring(dob.length - 2)}`;
+    }
+  }
+
+  let matchedPhone = '(***) ***-1842';
+  if (type === 'phone' && cleanPhone) {
+    const area = cleanPhone.substring(cleanPhone.length - 10, cleanPhone.length - 7);
+    const suffix = cleanPhone.substring(cleanPhone.length - 4);
+    matchedPhone = `(${area || '***'}) ***-${suffix || '1842'}`;
+  }
+
+  let legalName = 'Al*** J*** ***';
+  if (type === 'name_zip' && value) {
+    legalName = maskNameStr(value);
+  }
+
+  results.push({
+    id: 'free_npd_preview',
+    source: 'Pentester NPD',
+    reworkDate: new Date(now.getTime() - 150 * 24 * 3600 * 1000).toISOString(),
+    breachName: 'National Public Data Registry Exposure',
+    description: 'An exposure event affecting records from National Public Data, including name, phone number, and address listings.',
+    compromisedData: ['SSN', 'Full Name', 'Birth Date', 'Phone Numbers', 'Prior Addresses'],
+    riskScore: 97,
+    category: 'pii',
+    details: {
+      'Full Legal Registry Name': legalName,
+      'Exposed Social Security Number': `***-**-${ssnSuffix} (Masked for privacy compliance)`,
+      'Birth Coordinates': formattedDob,
+      'Verified Shared Phone Prefix': matchedPhone,
+      'Address Region': cityState
+    },
+    isVerifiedView: false
+  });
+
+  // 2. Canva Exposure (2019) or General Credential Breach
+  let formattedEmail = 'al****@domain.com';
+  let formattedUser = 'al*****th';
+  if (type === 'email') {
+    formattedEmail = maskEmailStr(value);
+  } else if (type === 'username') {
+    formattedUser = value.length <= 2 ? `${value}*****` : `${value.substring(0, 2)}*****${value.substring(value.length - 1)}`;
+  }
+
+  results.push({
+    id: 'free_canva_preview',
+    source: 'HaveIBeenPwned',
+    reworkDate: new Date(now.getTime() - 2500 * 24 * 3600 * 1000).toISOString(),
+    breachName: 'Canva Systems Data Exposure',
+    description: 'A data exposure event relating to Canva engineering records. Account email addresses and password hashes were exposed.',
+    compromisedData: ['Email', 'Passwords', 'Full Names'],
+    riskScore: 78,
+    category: 'credential',
+    details: {
+      'User Email / Identifier': type === 'email' ? formattedEmail : formattedUser,
+      'Exposed Password Hash Hint': `••••••${Math.floor(10 + Math.random() * 90)} (Bcrypt Hash)`
+    },
+    isVerifiedView: false
+  });
+
+  // 3. ParkMobile Incident (2021)
+  results.push({
+    id: 'free_parkmobile_preview',
+    source: 'DeHashed',
+    reworkDate: new Date(now.getTime() - 1800 * 24 * 3600 * 1000).toISOString(),
+    breachName: 'ParkMobile Incident',
+    description: 'A database exposure affecting customer records containing secure credentials, linked accounts, and vehicle details.',
+    compromisedData: ['Email', 'Phone', 'Linked User ID'],
+    riskScore: 64,
+    category: 'credential',
+    details: {
+      'Linked Account UID': `PM-98${Math.floor(100000 + Math.random() * 900000)}`,
+      'Masked Plate ID': 'CA-***' + Math.floor(10 + Math.random() * 90)
+    },
+    isVerifiedView: false
+  });
+
+  res.json({
+    success: true,
+    results,
+    queriedTarget: value,
+    isVerifiedUser: false
   });
 });
 
@@ -1100,7 +1272,8 @@ app.get('/api/privacy-requests', (req, res) => {
         estimatedCompletionDays: 5,
         createdAt: new Date(now.getTime() - 10 * 3600 * 1000).toISOString(),
         updatedAt: new Date(now.getTime() - 10 * 3600 * 1000).toISOString(),
-        screenshotCaptured: false
+        screenshotCaptured: false,
+        verificationDocuments: []
       },
       {
         id: 'req_2',
@@ -1114,7 +1287,8 @@ app.get('/api/privacy-requests', (req, res) => {
         estimatedCompletionDays: 3,
         createdAt: new Date(now.getTime() - 24 * 3600 * 1000).toISOString(),
         updatedAt: new Date(now.getTime() - 12 * 3600 * 1000).toISOString(),
-        screenshotCaptured: true
+        screenshotCaptured: true,
+        verificationDocuments: []
       },
       {
         id: 'req_3',
@@ -1128,7 +1302,8 @@ app.get('/api/privacy-requests', (req, res) => {
         estimatedCompletionDays: 0,
         createdAt: new Date(now.getTime() - 5 * 24 * 3600 * 1000).toISOString(),
         updatedAt: new Date(now.getTime() - 2 * 24 * 3600 * 1000).toISOString(),
-        screenshotCaptured: true
+        screenshotCaptured: true,
+        verificationDocuments: []
       }
     ];
     saveDB(db);
@@ -1164,7 +1339,8 @@ app.post('/api/privacy-requests', (req, res) => {
     estimatedCompletionDays: 7,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-    screenshotCaptured: false
+    screenshotCaptured: false,
+    verificationDocuments: []
   };
 
   db.privacyRequests.push(newRequest);
@@ -1181,6 +1357,55 @@ app.post('/api/privacy-requests', (req, res) => {
   );
 
   res.json({ success: true, request: newRequest });
+});
+
+app.post('/api/privacy-requests/:id/upload', (req, res) => {
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const { docType, docName } = req.body;
+  if (!docType || !docName) {
+    return res.status(400).json({ error: 'Document type and name are required.' });
+  }
+
+  const db = loadDB();
+  const request = db.privacyRequests?.find(r => r.id === req.params.id);
+  if (!request) return res.status(404).json({ error: 'Privacy request not found.' });
+
+  // Ensure request belongs to current user
+  if (request.userId !== session.userId && request.userEmail.toLowerCase() !== session.email.toLowerCase()) {
+    return res.status(403).json({ error: 'Access Restrained: Requester does not own this case file.' });
+  }
+
+  if (!request.verificationDocuments) request.verificationDocuments = [];
+  request.verificationDocuments.push({
+    docType,
+    docName,
+    uploadedAt: new Date().toISOString()
+  });
+
+  // Advance status if queued
+  if (request.status === 'queued') {
+    request.status = 'in_review';
+    request.statusDescription = 'Documentation and verification in progress';
+    request.providerNotes = 'Supporting documentation received. Velour team is compiling compliance credentials for submission.';
+  }
+
+  request.updatedAt = new Date().toISOString();
+  saveDB(db);
+
+  const ip = (req.headers['x-forwarded-for'] as string) || req.socket.remoteAddress || '127.0.0.1';
+  logSecurityEvent(
+    session.userId,
+    session.email,
+    'PRIVACY_REQUEST_DOCUMENT_UPLOADED',
+    'success',
+    ip,
+    session.fingerprint,
+    `Uploaded document [${docType}: ${docName}] for privacy request ID: ${request.id}`
+  );
+
+  res.json({ success: true, request });
 });
 
 app.get('/api/admin/privacy-requests', (req, res) => {

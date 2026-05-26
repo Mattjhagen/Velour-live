@@ -29,8 +29,47 @@ export default function PrivacyActionsTracker({
   const [requestType, setRequestType] = useState<'facial_removal' | 'people_search' | 'record_erasure'>('people_search');
   const [customExplain, setCustomExplain] = useState('');
 
+  // Request-specific uploads
+  const [uploadingRequestId, setUploadingRequestId] = useState<string | null>(null);
+  const [uploadDocType, setUploadDocType] = useState<string>('government_id');
+  const [uploadDocName, setUploadDocName] = useState<string>('');
+
   // Info Collapse layer
   const [showExplanation, setShowExplanation] = useState(true);
+
+  async function handleUploadDocument(reqId: string) {
+    if (!uploadDocName) {
+      onShowNotice("Please specify a document label (e.g. State ID, Utility Bill).");
+      return;
+    }
+    setUploadingRequestId(reqId);
+    try {
+      const res = await fetch(`/api/privacy-requests/${reqId}/upload`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${authToken}`
+        },
+        body: JSON.stringify({
+          docType: uploadDocType,
+          docName: uploadDocName
+        })
+      });
+      const data = await res.json();
+      if (data.success) {
+        onShowNotice(`Verification document registered successfully.`);
+        setRequests(prev => prev.map(r => r.id === reqId ? data.request : r));
+        setUploadDocName('');
+      } else {
+        onShowNotice(data.error || "Upload failed.");
+      }
+    } catch (err) {
+      console.error(err);
+      onShowNotice("Network error processing upload.");
+    } finally {
+      setUploadingRequestId(null);
+    }
+  }
 
   useEffect(() => {
     fetchRequests();
@@ -88,51 +127,51 @@ export default function PrivacyActionsTracker({
   // Core professional status descriptors
   const STATUSES_METADATA = {
     queued: {
-      badgeText: 'Received',
-      bg: 'bg-zinc-900 border-zinc-800 text-zinc-300',
+      badgeText: 'Queued',
+      bg: 'bg-zinc-800/80 border-zinc-700/50 text-zinc-300',
       dot: 'bg-zinc-400',
-      label: 'Request secured and queued',
-      explanation: 'Our operations portal has acknowledged, signed, and logged your statutory opt-out requests.',
+      label: 'Request received',
+      explanation: 'Our support operations desk has received and cataloged your statutory removal request.',
       window: '1-2 business days'
     },
     in_review: {
-      badgeText: 'Reviewing',
-      bg: 'bg-cyan-955/10 border-cyan-900/30 text-cyan-300',
-      dot: 'bg-cyan-400',
-      label: 'Verification and provider preparation',
-      explanation: 'Velour operations team is verifying the provider directory and validating registration requirements.',
+      badgeText: 'Preparing',
+      bg: 'bg-indigo-950/40 border-indigo-850/60 text-indigo-300',
+      dot: 'bg-indigo-400',
+      label: 'Documentation and verification in progress',
+      explanation: 'Velour team is compiling required documentation and matching verification files to submit opt-out requests.',
       window: '1-3 business days'
     },
     submitted: {
       badgeText: 'Submitted',
-      bg: 'bg-amber-955/10 border-amber-900/20 text-amber-300',
+      bg: 'bg-amber-500/15 border-amber-500/30 text-amber-300',
       dot: 'bg-amber-400',
-      label: 'Removal request delivered to provider',
-      explanation: 'The standard suppression certificate has been transmitted to the provider network.',
+      label: 'Formal request sent to provider',
+      explanation: 'The formal suppression certificate and opt-out request have been transmitted to the provider network.',
       window: '2-5 business days'
     },
     awaiting_response: {
-      badgeText: 'Awaiting Provider',
-      bg: 'bg-purple-955/10 border-purple-900/25 text-purple-300',
+      badgeText: 'Awaiting Response',
+      bg: 'bg-purple-500/15 border-purple-500/30 text-purple-300',
       dot: 'bg-purple-400',
       label: 'Waiting for provider confirmation',
-      explanation: 'Delivered. We are tracking response indicators to confirm directory records removal.',
+      explanation: 'We are tracking response logs and corresponding with the broker compliance officers to confirm records suppression.',
       window: '3-10 business days'
     },
     actioned: {
       badgeText: 'Completed',
-      bg: 'bg-emerald-955/10 border-emerald-900/20 text-emerald-450',
+      bg: 'bg-emerald-500/15 border-emerald-500/30 text-emerald-400',
       dot: 'bg-emerald-400',
-      label: 'Provider confirmed removal action',
-      explanation: 'The provider has processed the request and removed matching details from active indexes.',
+      label: 'Provider confirmed action',
+      explanation: 'The provider has processed the request and confirmed suppression of matching details from active directories.',
       window: 'Completed'
     },
     unavailable: {
       badgeText: 'Unavailable',
-      bg: 'bg-rose-955/10 border-rose-900/20 text-rose-350',
+      bg: 'bg-rose-500/15 border-rose-500/30 text-rose-450',
       dot: 'bg-rose-500',
       label: 'Provider unable or unwilling to process request',
-      explanation: 'The recipient broker stands outside statutory consumer laws or rejected identity matching criteria.',
+      explanation: 'The recipient broker stands outside CCPA guidelines or refused verification matching coordinates.',
       window: 'Unavailable'
     }
   };
@@ -186,23 +225,23 @@ export default function PrivacyActionsTracker({
               
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1 text-xs">
                 <div className="space-y-1">
-                  <span className="font-semibold text-zinc-300 block">1. Identity Verification</span>
+                  <span className="font-semibold text-zinc-300 block">1. Why Verification is Required</span>
                   <p className="text-[#B0B7C3] leading-relaxed">
-                    Most providers will reject removal requests if identity ownership isn't fully validated. Complete Government ID and Photo Match verification check verifies you are the authorized subject.
+                    Brokers are legally obligated to verify that the person requesting opt-out is actually the subject of the data. This prevents unauthorized suppression of public listings.
                   </p>
                 </div>
                 
                 <div className="space-y-1">
-                  <span className="font-semibold text-zinc-300 block">2. Not Instant Deletion</span>
+                  <span className="font-semibold text-zinc-300 block">2. Why Timelines Vary</span>
                   <p className="text-[#B0B7C3] leading-relaxed">
-                    Velour files regulatory requests on your behalf. Providers usually take between 3 and 15 business days to confirm, verify, and complete records purging.
+                    Suppression requests are processed either through automated API databases or manual compliance review queues. Processing times range from 2 to 15 business days depending on the broker's system.
                   </p>
                 </div>
 
                 <div className="space-y-1">
-                  <span className="font-semibold text-zinc-300 block">3. Legitimate Sourcing</span>
+                  <span className="font-semibold text-zinc-300 block">3. Why Data Brokers Exist</span>
                   <p className="text-[#B0B7C3] leading-relaxed">
-                    We source footprint alerts from audited public record archives. In compliance with active user consent, we target opt-out compliance protocols safely.
+                    Brokers crawl and compile voter registries, court logs, real estate transactions, and online aliases to build profiles for background search databases. Opting out suppresses this indexing.
                   </p>
                 </div>
               </div>
@@ -232,48 +271,92 @@ export default function PrivacyActionsTracker({
           <div className="flex justify-between items-center pb-4 mb-4 border-b border-zinc-800">
             <div>
               <h3 className="text-sm font-semibold text-zinc-100 uppercase tracking-wider font-sans">Submit Privacy Opt-Out Request</h3>
-              <p className="text-xs text-[#B0B7C3] mt-0.5">Velour drafts and coordinates an authorized regulatory opt-out request.</p>
+              <p className="text-xs text-[#B0B7C3] mt-0.5">Choose a provider to initiate an administrative opt-out request.</p>
             </div>
             <button 
               onClick={() => setAddingRequest(false)}
-              className="text-xs text-zinc-500 hover:text-zinc-300"
+              className="text-xs text-zinc-500 hover:text-zinc-350"
             >
               Cancel
             </button>
           </div>
 
-          <form onSubmit={handleSubmitRequest} className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5">Target Provider Name</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. PimEyes, Whitepages, National Public Data, Canva"
-                  value={targetService}
-                  onChange={(e) => setTargetService(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
-                />
+          <form onSubmit={handleSubmitRequest} className="space-y-5">
+            <div>
+              <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-2 font-mono">Select Target Data Broker / Provider</label>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 mb-4">
+                {[
+                  { name: 'National Public Data (NPD)', type: 'people_search', desc: 'SSNs, addresses & phone registries' },
+                  { name: 'Whitepages Registry', type: 'people_search', desc: 'Public records search broker' },
+                  { name: 'Spokeo Directory', type: 'people_search', desc: 'Online dossier & background searches' },
+                  { name: 'PimEyes Facial Indexing', type: 'facial_removal', desc: 'Facial recognition scraper suppression' },
+                  { name: 'LexisNexis Database', type: 'people_search', desc: 'Audited legal & records suppression' },
+                  { name: 'Custom Provider...', type: 'custom', desc: 'Specify another third-party search source' },
+                ].map((broker) => {
+                  const isSelected = broker.type === 'custom' 
+                    ? (!['National Public Data (NPD)', 'Whitepages Registry', 'Spokeo Directory', 'PimEyes Facial Indexing', 'LexisNexis Database'].includes(targetService) && targetService !== '')
+                    : targetService === broker.name;
+                  return (
+                    <button
+                      key={broker.name}
+                      type="button"
+                      onClick={() => {
+                        if (broker.type === 'custom') {
+                          setTargetService('');
+                        } else {
+                          setTargetService(broker.name);
+                          setRequestType(broker.type as any);
+                        }
+                      }}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        isSelected 
+                          ? 'bg-zinc-800 border-zinc-700 text-zinc-100 shadow-sm' 
+                          : 'bg-zinc-950/60 border-zinc-900 text-zinc-400 hover:border-zinc-800'
+                      }`}
+                    >
+                      <span className="text-[11px] font-bold block">{broker.name}</span>
+                      <span className="text-[9.5px] text-zinc-500 block mt-0.5 leading-normal">{broker.desc}</span>
+                    </button>
+                  );
+                })}
               </div>
 
-              <div>
-                <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5">Request Class</label>
-                <select
-                  value={requestType}
-                  onChange={(e) => setRequestType(e.target.value as any)}
-                  className="w-full bg-zinc-950 border border-zinc-850 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none"
-                >
-                  <option value="people_search">Standard Broker Removal (Whitepages/NPD)</option>
-                  <option value="facial_removal">Image Exposure Suppression (Photo Index & Link Deletion)</option>
-                  <option value="record_erasure">Exposed Service Account Erasure (Canva/Adobe)</option>
-                </select>
-              </div>
+              {/* Show text input only if Custom is selected or targetService is custom */}
+              {(!['National Public Data (NPD)', 'Whitepages Registry', 'Spokeo Directory', 'PimEyes Facial Indexing', 'LexisNexis Database'].includes(targetService)) && (
+                <div className="space-y-4 pt-1 animate-in slide-in-from-top-2 duration-200">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Custom Provider Name</label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Canva, Adobe, Spokeo, BeenVerified"
+                        value={targetService}
+                        onChange={(e) => setTargetService(e.target.value)}
+                        className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-700"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Request Class</label>
+                      <select
+                        value={requestType}
+                        onChange={(e) => setRequestType(e.target.value as any)}
+                        className="w-full bg-zinc-950 border border-zinc-850 rounded-xl p-2.5 text-xs text-zinc-200 focus:outline-none"
+                      >
+                        <option value="people_search">Standard Broker Removal (Whitepages/NPD)</option>
+                        <option value="facial_removal">Image Exposure Suppression (Photo Index & Link Deletion)</option>
+                        <option value="record_erasure">Exposed Service Account Erasure (Canva/Adobe)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div>
-              <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5">Context & Associated Details (Optional)</label>
+              <label className="text-[10px] font-semibold text-zinc-500 uppercase tracking-widest block mb-1.5 font-mono">Associated Details or Identifiers (Optional)</label>
               <textarea
-                placeholder="List any username, profile URL, or specific phone numbers associated with this data source removal request."
+                placeholder="List any email, phone number, username or profile URL associated with this removal request."
                 value={customExplain}
                 onChange={(e) => setCustomExplain(e.target.value)}
                 rows={2}
@@ -292,12 +375,12 @@ export default function PrivacyActionsTracker({
               <button
                 type="submit"
                 disabled={submitting}
-                className="px-5 py-2 rounded-xl bg-zinc-100 hover:bg-zinc-200 text-zinc-950 text-xs font-bold transition flex items-center gap-1.5"
+                className="px-5 py-2 rounded-xl bg-white hover:bg-zinc-100 text-zinc-950 text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
               >
                 {submitting ? (
                   <RefreshCw className="w-4 h-4 animate-spin" />
                 ) : (
-                  <Send className="w-3.5 h-3.5" />
+                  <Send className="w-3.5 h-3.5 text-zinc-950" />
                 )}
                 <span>Authorize & File Request</span>
               </button>
@@ -405,8 +488,8 @@ export default function PrivacyActionsTracker({
                       {/* Step markers with built-in interactive tooltip descriptions */}
                       <div className="grid grid-cols-5 gap-1.5 pt-1">
                         {[
-                          { key: 'queued', label: 'Received' },
-                          { key: 'in_review', label: 'Reviewing' },
+                          { key: 'queued', label: 'Queued' },
+                          { key: 'in_review', label: 'Preparing' },
                           { key: 'submitted', label: 'Submitted' },
                           { key: 'awaiting_response', label: 'Awaiting' },
                           { key: 'actioned', label: 'Completed' }
@@ -466,10 +549,87 @@ export default function PrivacyActionsTracker({
                     {/* Provider details feedback */}
                     {req.providerNotes && (
                       <div className="p-3.5 bg-zinc-950/50 border border-zinc-850 rounded-xl space-y-1">
-                        <span className="text-[10px] font-semibold font-mono text-zinc-450 block uppercase">Latest Provider Feedback:</span>
+                        <span className="text-[10px] font-semibold font-mono text-zinc-450 block uppercase tracking-wide">Latest Provider Feedback:</span>
                         <p className="text-xs text-[#B0B7C3] leading-relaxed font-sans">{req.providerNotes}</p>
                       </div>
                     )}
+
+                    {/* Request-specific uploads / Verification Files */}
+                    <div className="p-4 bg-zinc-950/40 border border-zinc-850 rounded-xl space-y-3.5">
+                      <div className="flex justify-between items-center border-b border-zinc-900/60 pb-1.5">
+                        <span className="text-[10px] font-semibold font-mono text-zinc-450 block uppercase tracking-wide">Supporting Verification Documents</span>
+                        <span className="text-[9.5px] text-zinc-550 font-sans italic">Helps prevent providers from rejecting statutory requests</span>
+                      </div>
+                      
+                      {/* Document List */}
+                      {req.verificationDocuments && req.verificationDocuments.length > 0 ? (
+                        <div className="space-y-1.5">
+                          {req.verificationDocuments.map((doc, idx) => (
+                            <div key={idx} className="flex justify-between items-center text-xs bg-zinc-900/30 border border-zinc-900 p-2.5 rounded-lg">
+                              <div className="flex items-center gap-2">
+                                <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+                                <span className="text-zinc-200 font-medium">{doc.docName}</span>
+                              </div>
+                              <div className="text-right text-[10px] font-mono text-zinc-500">
+                                <span className="capitalize bg-zinc-950 border border-zinc-850/60 text-zinc-450 px-1.5 py-0.5 rounded text-[9px] mr-2">
+                                  {doc.docType.replace('_', ' ')}
+                                </span>
+                                {new Date(doc.uploadedAt).toLocaleDateString()}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-zinc-500 italic font-sans pl-1">No request-specific files uploaded yet. Some brokers require explicit verification to complete deletion.</p>
+                      )}
+
+                      {/* Upload Form */}
+                      {req.status !== 'actioned' && req.status !== 'unavailable' && (
+                        <div className="pt-2 border-t border-zinc-900/60">
+                          <div className="flex flex-col sm:flex-row gap-2 items-end">
+                            <div className="flex-1 w-full text-left">
+                              <label className="text-[9px] font-semibold text-zinc-555 uppercase tracking-wider block mb-1 font-mono">Document Type</label>
+                              <select
+                                value={uploadDocType}
+                                onChange={(e) => setUploadDocType(e.target.value)}
+                                className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2 text-[11px] text-zinc-300 focus:outline-none"
+                              >
+                                <option value="government_id">Government ID (Driver License/Passport)</option>
+                                <option value="utility_bill">Proof of Address (Utility Bill/Lease)</option>
+                                <option value="selfie">Verification Selfie (Photo Match)</option>
+                                <option value="statutory_letter">Authorized Statutory Mandate Letter</option>
+                              </select>
+                            </div>
+                            <div className="flex-1 w-full text-left">
+                              <label className="text-[9px] font-semibold text-zinc-555 uppercase tracking-wider block mb-1 font-mono">Document Label / Name</label>
+                              <input
+                                type="text"
+                                placeholder="e.g. State ID, Power Bill"
+                                value={uploadingRequestId === req.id ? uploadDocName : (uploadingRequestId === null ? uploadDocName : '')}
+                                onChange={(e) => {
+                                  setUploadingRequestId(req.id);
+                                  setUploadDocName(e.target.value);
+                                }}
+                                className="w-full bg-zinc-950 border border-zinc-850 rounded-lg p-2 text-[11px] text-zinc-300 focus:outline-none placeholder-zinc-700"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              disabled={uploadingRequestId !== null && uploadingRequestId !== req.id}
+                              onClick={() => handleUploadDocument(req.id)}
+                              className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-150 text-[11px] font-semibold rounded-lg transition shadow-sm w-full sm:w-auto shrink-0 flex items-center justify-center gap-1.5"
+                            >
+                              {uploadingRequestId === req.id ? (
+                                <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                              ) : (
+                                <Inbox className="w-3.5 h-3.5 text-zinc-350" />
+                              )}
+                              <span>Upload File</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Right hand confirmations/screenshots */}

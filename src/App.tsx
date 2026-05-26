@@ -74,9 +74,13 @@ export default function App() {
 
   // Discovery flow states
   const [discoveryPhase, setDiscoveryPhase] = useState<'hero' | 'scanning' | 'preview'>('hero');
+  const [discoveryType, setDiscoveryType] = useState<'email' | 'phone' | 'username' | 'name_zip'>('email');
   const [discoveryEmail, setDiscoveryEmail] = useState('');
   const [discoveryPhone, setDiscoveryPhone] = useState('');
   const [discoveryUsername, setDiscoveryUsername] = useState('');
+  const [discoveryLastName, setDiscoveryLastName] = useState('');
+  const [discoveryZip, setDiscoveryZip] = useState('');
+  const [discoveryDob, setDiscoveryDob] = useState('');
   const [discoveryExpanded, setDiscoveryExpanded] = useState(false);
   const [discoveryResults, setDiscoveryResults] = useState<any>(null);
   const [scanStep, setScanStep] = useState(0);
@@ -315,12 +319,29 @@ export default function App() {
 
   async function runFreeDiscovery(e: React.FormEvent) {
     e.preventDefault();
-    if (!discoveryEmail) return;
+    let queryValue = '';
+    if (discoveryType === 'email') queryValue = discoveryEmail;
+    else if (discoveryType === 'phone') queryValue = discoveryPhone;
+    else if (discoveryType === 'username') queryValue = discoveryUsername;
+    else if (discoveryType === 'name_zip') queryValue = discoveryLastName;
+
+    if (!queryValue) return;
+
     setDiscoveryPhase('scanning');
-    let results: { breachCount: number | null; sources: string[]; categories: string[]; riskLevel: string; limitedAccess: boolean } = {
+    
+    let url = `/api/exposure/free-preview?type=${discoveryType}&value=${encodeURIComponent(queryValue)}`;
+    if (discoveryType === 'name_zip') {
+      url += `&zip=${encodeURIComponent(discoveryZip)}`;
+    }
+    if (discoveryDob) {
+      url += `&dob=${encodeURIComponent(discoveryDob)}`;
+    }
+
+    let results: { breachCount: number | null; sources: string[]; categories: string[]; riskLevel: string; limitedAccess: boolean; rawResults?: any[]; queriedTarget?: string } = {
       breachCount: null, sources: [], categories: [], riskLevel: 'unknown', limitedAccess: false
     };
-    const fetchData = fetch(`/api/exposure/search?q=${encodeURIComponent(discoveryEmail)}&consent=true&preview=true`, {
+
+    const fetchData = fetch(url, {
       headers: { 'x-turnstile-token': 'cf-turnstile-simulated-token-success' }
     }).then(r => r.json()).then(data => {
       if (data.success && Array.isArray(data.results)) {
@@ -328,13 +349,16 @@ export default function App() {
         results = {
           breachCount: bc,
           sources: [...new Set<string>(data.results.map((r: any) => String(r.source)))],
-          categories: [...new Set<string>(data.results.flatMap((r: any) => r.compromisedData || []))].slice(0, 5),
+          categories: [...new Set<string>(data.results.flatMap((r: any) => r.compromisedData || []))],
           riskLevel: bc > 3 ? 'moderate' : bc > 0 ? 'low' : 'minimal',
-          limitedAccess: false
+          limitedAccess: false,
+          rawResults: data.results,
+          queriedTarget: data.queriedTarget || queryValue
         };
       } else { results.limitedAccess = true; }
     }).catch(() => { results.limitedAccess = true; });
-    await Promise.all([fetchData, new Promise<void>(r => setTimeout(r, 2800))]);
+
+    await Promise.all([fetchData, new Promise<void>(r => setTimeout(r, 2200))]);
     setDiscoveryResults(results);
     setDiscoveryPhase('preview');
   }
@@ -664,64 +688,158 @@ export default function App() {
                   </div>
 
                   {/* Right: Discovery form */}
+                  {/* Right: Discovery form */}
                   <div className="lg:col-span-6">
                     <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-7 shadow-2xl backdrop-blur-sm space-y-5">
                       <div className="space-y-1 text-left">
                         <h3 className="text-lg font-semibold text-white">Free Exposure Check</h3>
-                        <p className="text-sm text-zinc-400">Enter your email to see what's already public.</p>
+                        <p className="text-xs text-zinc-400">Choose the identifier you feel most comfortable starting with. Scans are processed transiently and never persisted.</p>
                       </div>
-                      <form onSubmit={runFreeDiscovery} className="space-y-3">
-                        <div className="relative">
-                          <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
-                          <input
-                            id="discovery-email-input"
-                            type="email"
-                            required
-                            value={discoveryEmail}
-                            onChange={(e) => setDiscoveryEmail(e.target.value)}
-                            placeholder="your@email.com"
-                            className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
-                          />
-                        </div>
-                        {discoveryExpanded && (
-                          <div className="space-y-3 animate-in slide-in-from-top-2 duration-200">
+
+                      {/* Tab selector for starting identifier */}
+                      <div className="grid grid-cols-4 gap-1 p-1 bg-zinc-950 rounded-xl border border-zinc-900">
+                        {(['email', 'phone', 'username', 'name_zip'] as const).map((t) => (
+                          <button
+                            key={t}
+                            type="button"
+                            onClick={() => {
+                              setDiscoveryType(t);
+                              setDiscoveryExpanded(false);
+                            }}
+                            className={`py-1.5 text-[11px] font-semibold rounded-lg transition-all capitalize ${
+                              discoveryType === t
+                                ? 'bg-zinc-800 text-zinc-100'
+                                : 'text-zinc-500 hover:text-zinc-300'
+                            }`}
+                          >
+                            {t === 'name_zip' ? 'Name + ZIP' : t}
+                          </button>
+                        ))}
+                      </div>
+
+                      <form onSubmit={runFreeDiscovery} className="space-y-4">
+                        {discoveryType === 'email' && (
+                          <div className="space-y-2 text-left">
+                            <div className="relative">
+                              <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+                              <input
+                                id="discovery-email-input"
+                                type="email"
+                                required
+                                value={discoveryEmail}
+                                onChange={(e) => setDiscoveryEmail(e.target.value)}
+                                placeholder="your@email.com"
+                                className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
+                              />
+                            </div>
+                            <span className="text-[11px] text-zinc-500 block pl-1">
+                              We compare your email against public records to map exposed data points.
+                            </span>
+                          </div>
+                        )}
+
+                        {discoveryType === 'phone' && (
+                          <div className="space-y-2 text-left">
                             <div className="relative">
                               <Phone className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                               <input
                                 type="tel"
+                                required
                                 value={discoveryPhone}
                                 onChange={(e) => setDiscoveryPhone(e.target.value)}
-                                placeholder="Phone number (optional)"
+                                placeholder="Phone number e.g. (612) 555-1290"
                                 className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
                               />
                             </div>
+                            <span className="text-[11px] text-zinc-500 block pl-1">
+                              Check if your number was indexed in NPD or other public registries.
+                            </span>
+                          </div>
+                        )}
+
+                        {discoveryType === 'username' && (
+                          <div className="space-y-2 text-left">
                             <div className="relative">
                               <AtSign className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
                               <input
                                 type="text"
+                                required
                                 value={discoveryUsername}
                                 onChange={(e) => setDiscoveryUsername(e.target.value)}
-                                placeholder="Username (optional)"
+                                placeholder="Username/alias e.g. mattjh"
                                 className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl pl-10 pr-4 py-3 text-sm text-white placeholder-zinc-600 focus:outline-none transition-colors"
                               />
                             </div>
+                            <span className="text-[11px] text-zinc-500 block pl-1">
+                              Examines database dumps and credentials profiles matching your alias.
+                            </span>
                           </div>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => setDiscoveryExpanded(!discoveryExpanded)}
-                          className="flex items-center gap-1.5 text-[12px] text-zinc-500 hover:text-zinc-300 transition-colors"
-                        >
-                          {discoveryExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                          <span>{discoveryExpanded ? 'Fewer options' : '+ Add phone or username for a deeper scan'}</span>
-                        </button>
+
+                        {discoveryType === 'name_zip' && (
+                          <div className="space-y-2 text-left">
+                            <div className="grid grid-cols-2 gap-2">
+                              <input
+                                type="text"
+                                required
+                                value={discoveryLastName}
+                                onChange={(e) => setDiscoveryLastName(e.target.value)}
+                                placeholder="Last Name (e.g. Hagen)"
+                                className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-650 focus:outline-none transition-colors"
+                              />
+                              <input
+                                type="text"
+                                required
+                                pattern="\d{5}"
+                                maxLength={5}
+                                value={discoveryZip}
+                                onChange={(e) => setDiscoveryZip(e.target.value)}
+                                placeholder="ZIP Code (e.g. 55401)"
+                                className="w-full bg-zinc-950 border border-zinc-800 hover:border-zinc-700 focus:border-zinc-600 rounded-xl px-4 py-3 text-sm text-white placeholder-zinc-650 focus:outline-none transition-colors"
+                              />
+                            </div>
+                            <span className="text-[11px] text-zinc-500 block pl-1">
+                              Query local public broker listings and directory records matching you.
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Collapsible Optional DOB Fragment */}
+                        <div className="border-t border-zinc-900 pt-3">
+                          <button
+                            type="button"
+                            onClick={() => setDiscoveryExpanded(!discoveryExpanded)}
+                            className="flex items-center gap-1.5 text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+                          >
+                            {discoveryExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            <span>Add birth year for a more precise match (optional)</span>
+                          </button>
+
+                          {discoveryExpanded && (
+                            <div className="mt-2.5 space-y-2 text-left animate-in slide-in-from-top-1 duration-200">
+                              <input
+                                type="text"
+                                pattern="\d{4}"
+                                maxLength={4}
+                                value={discoveryDob}
+                                onChange={(e) => setDiscoveryDob(e.target.value)}
+                                placeholder="Year of Birth e.g. 1992"
+                                className="w-full bg-zinc-950 border border-zinc-850 hover:border-zinc-800 focus:border-zinc-700 rounded-xl px-4 py-2.5 text-xs text-white placeholder-zinc-650 focus:outline-none transition-colors"
+                              />
+                              <span className="text-[10px] text-zinc-600 block pl-1 leading-normal">
+                                Used to filter public directory entries under statutory CCPA guidelines.
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
                         <button
                           id="run-discovery-submit"
                           type="submit"
-                          className="w-full bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2 mt-1"
+                          className="w-full bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-sm py-3 rounded-xl transition-colors flex items-center justify-center gap-2 mt-1 shadow-sm"
                         >
-                          <Zap className="w-4 h-4" />
-                          Run Free Discovery
+                          <Zap className="w-4 h-4 text-zinc-950" />
+                          Run Free Discovery Scan
                         </button>
                       </form>
                       <div className="flex items-center justify-center gap-5 pt-1 border-t border-zinc-900">
@@ -818,144 +936,305 @@ export default function App() {
 
             {/* === PHASE 3: RESULTS PREVIEW === */}
             {discoveryPhase === 'preview' && discoveryResults && (
-              <div className="space-y-8 py-6 sm:py-10 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="space-y-10 py-6 sm:py-10 animate-in fade-in slide-in-from-bottom-4 duration-500 text-left">
                 {/* Header */}
                 <div className="text-center space-y-3">
                   <div className="inline-flex items-center gap-2 px-3 py-1.5 bg-zinc-900 border border-zinc-800 rounded-full text-zinc-400 text-[11px] font-medium">
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
                     <span>Scan complete</span>
                   </div>
-                  <h2 className="text-3xl font-bold text-white">Your exposure summary</h2>
-                  <p className="text-zinc-400 text-sm">Scanned for: <span className="text-zinc-200 font-medium font-mono">{discoveryEmail}</span></p>
+                  <h2 className="text-3xl font-bold text-white">Your Exposure Summary</h2>
+                  <p className="text-zinc-400 text-sm">
+                    Scanned for: <span className="text-zinc-200 font-medium font-mono bg-zinc-950 px-2 py-1 rounded border border-zinc-900">{discoveryResults.queriedTarget}</span>
+                  </p>
                 </div>
 
-                {/* Insight cards */}
+                {/* Insight cards (Calm, neutral/grey-focused, credit-score style dashboard) */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3 text-left">
-                    <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
-                      <Database className="w-4 h-4 text-amber-400" />
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3">
+                    <div className="w-8 h-8 rounded-lg bg-zinc-800/60 border border-zinc-700/40 flex items-center justify-center">
+                      <Database className="w-4 h-4 text-zinc-300" />
                     </div>
                     <div>
                       <div className="text-3xl font-bold text-white">
                         {discoveryResults.limitedAccess ? '—' : (discoveryResults.breachCount ?? 0)}
                       </div>
-                      <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">
-                        {discoveryResults.limitedAccess ? 'Preview scan complete' : discoveryResults.breachCount === 0 ? 'No known data events' : `Known data ${discoveryResults.breachCount === 1 ? 'event' : 'events'} found`}
+                      <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed font-sans">
+                        {discoveryResults.limitedAccess ? 'Scan completed' : discoveryResults.breachCount === 0 ? 'No known data events' : `Exposure database matches`}
                       </p>
                     </div>
                   </div>
-                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3 text-left">
-                    <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
-                      <Globe className="w-4 h-4 text-indigo-400" />
+
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3">
+                    <div className="w-8 h-8 rounded-lg bg-zinc-800/60 border border-zinc-700/40 flex items-center justify-center">
+                      <Globe className="w-4 h-4 text-zinc-300" />
                     </div>
                     <div>
                       <div className="text-3xl font-bold text-white">
                         {discoveryResults.limitedAccess ? '—' : (discoveryResults.sources?.length ?? 0)}
                       </div>
-                      <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">Public data sources scanned</p>
+                      <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed font-sans">Public datasets & brokers scanned</p>
                     </div>
                   </div>
-                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3 text-left">
-                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                      discoveryResults.riskLevel === 'moderate' ? 'bg-amber-500/10 border border-amber-500/20' :
-                      discoveryResults.riskLevel === 'low' ? 'bg-emerald-500/10 border border-emerald-500/20' :
-                      'bg-zinc-800/60 border border-zinc-700/40'
-                    }`}>
-                      <TrendingUp className={`w-4 h-4 ${
-                        discoveryResults.riskLevel === 'moderate' ? 'text-amber-400' :
-                        discoveryResults.riskLevel === 'low' ? 'text-emerald-400' : 'text-zinc-400'
-                      }`} />
-                    </div>
-                    <div>
-                      <div className={`text-lg font-bold capitalize ${
-                        discoveryResults.riskLevel === 'moderate' ? 'text-amber-300' :
-                        discoveryResults.riskLevel === 'low' ? 'text-emerald-300' : 'text-zinc-300'
-                      }`}>
-                        {discoveryResults.riskLevel === 'unknown' ? 'Review results' : (discoveryResults.riskLevel ?? 'Minimal')}
-                      </div>
-                      <p className="text-xs text-zinc-400 mt-0.5 leading-relaxed">Estimated exposure level</p>
-                    </div>
-                  </div>
-                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3 text-left">
+
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3">
                     <div className="w-8 h-8 rounded-lg bg-zinc-800/60 border border-zinc-700/40 flex items-center justify-center">
-                      <FileText className="w-4 h-4 text-zinc-400" />
+                      <TrendingUp className="w-4 h-4 text-zinc-300" />
                     </div>
                     <div>
-                      <p className="text-xs text-zinc-300 font-medium mb-1.5">Data types</p>
+                      <div className="text-lg font-bold text-zinc-300 capitalize">
+                        {discoveryResults.riskLevel === 'unknown' ? 'Evaluation complete' : (discoveryResults.riskLevel === 'moderate' ? 'Moderate Risk' : discoveryResults.riskLevel === 'low' ? 'Low Risk' : 'Minimal Risk')}
+                      </div>
+                      <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed font-sans">Calculated exposure rating</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-5 space-y-3">
+                    <div className="w-8 h-8 rounded-lg bg-zinc-800/60 border border-zinc-700/40 flex items-center justify-center">
+                      <FileText className="w-4 h-4 text-zinc-300" />
+                    </div>
+                    <div>
+                      <p className="text-xs text-zinc-400 font-semibold mb-1.5 font-sans">Compromised Datatypes</p>
                       {discoveryResults.categories?.length > 0 ? (
                         <div className="flex flex-wrap gap-1">
                           {discoveryResults.categories.slice(0, 3).map((cat: string) => (
-                            <span key={cat} className="text-[10px] bg-zinc-800 border border-zinc-700 text-zinc-400 rounded px-1.5 py-0.5 font-mono">{cat}</span>
+                            <span key={cat} className="text-[9px] bg-zinc-950 border border-zinc-900 text-zinc-400 rounded px-1.5 py-0.5 font-mono">{cat}</span>
                           ))}
-                          {discoveryResults.categories.length > 3 && <span className="text-[10px] text-zinc-500">+{discoveryResults.categories.length - 3} more</span>}
+                          {discoveryResults.categories.length > 3 && <span className="text-[10px] text-zinc-500 font-sans">+{discoveryResults.categories.length - 3} more</span>}
                         </div>
-                      ) : <p className="text-xs text-zinc-500">Sign up to see details</p>}
+                      ) : <p className="text-xs text-zinc-550 font-sans">Registry profile matches</p>}
                     </div>
                   </div>
                 </div>
 
-                {/* Recommendations */}
-                <div className="bg-zinc-900/30 border border-zinc-800 rounded-2xl p-6 space-y-4 text-left">
-                  <h4 className="text-sm font-semibold text-zinc-200 flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-indigo-400" />
-                    Privacy recommendations
-                  </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
-                    {[
-                      { title: 'Change exposed passwords', desc: 'Use a unique, strong password for each service. A password manager makes this easy.' },
-                      { title: 'Enable two-factor auth', desc: 'Add a second layer of security to your most important accounts right away.' },
-                      { title: 'Monitor your credit', desc: 'Consider a free credit freeze with the major bureaus if financial data appears exposed.' },
-                    ].map((rec) => (
-                      <div key={rec.title} className="flex items-start gap-2.5">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                        <div>
-                          <span className="text-xs font-semibold text-zinc-200 block">{rec.title}</span>
-                          <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">{rec.desc}</p>
+                {/* 1. Personalized Exposures List */}
+                <div className="space-y-4">
+                  <div className="border-b border-zinc-900 pb-2">
+                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                      <Shield className="w-4.5 h-4.5 text-zinc-400" />
+                      <span>Exposed Records Preview</span>
+                    </h3>
+                    <p className="text-xs text-zinc-450 mt-1">Masked details proving record existence without exposing highly sensitive credentials.</p>
+                  </div>
+
+                  {discoveryResults.rawResults && discoveryResults.rawResults.length > 0 ? (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {discoveryResults.rawResults.map((record: any) => (
+                        <div key={record.id} className="bg-zinc-900/40 border border-zinc-850 rounded-2xl p-5 space-y-3 flex flex-col justify-between">
+                          <div className="space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <span className="text-xs font-bold text-zinc-200">{record.breachName}</span>
+                              <span className="text-[10px] font-mono text-zinc-500 bg-zinc-950/60 border border-zinc-900 px-2 py-0.5 rounded">
+                                {record.reworkDate ? new Date(record.reworkDate).getFullYear() : '2024'}
+                              </span>
+                            </div>
+                            <p className="text-[11px] text-zinc-400 leading-relaxed font-sans">{record.description}</p>
+                          </div>
+
+                          {/* Masked details sub-card */}
+                          <div className="bg-zinc-950/60 border border-zinc-900 p-3 rounded-xl space-y-2">
+                            <div className="text-[10px] font-semibold font-mono text-zinc-500 uppercase tracking-wider">Masked Identifiers Found</div>
+                            <div className="space-y-1">
+                              {Object.entries(record.details || {}).map(([key, val]: any) => (
+                                <div key={key} className="flex justify-between items-start text-[11px] font-mono leading-tight gap-4">
+                                  <span className="text-zinc-500 text-left">{key}:</span>
+                                  <span className="text-zinc-350 text-right select-all">{val}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-12 text-center bg-zinc-950/30 border border-zinc-900 rounded-2xl">
+                      <ShieldCheck className="w-6 h-6 text-zinc-650 mx-auto mb-2" />
+                      <p className="text-xs text-zinc-500 font-sans">No immediate active exposure events cataloged for this target.</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* 2. Educational Trust Banner explaining sourcing */}
+                <div className="bg-zinc-900/20 border border-zinc-850 rounded-2xl p-5 flex items-start gap-3.5">
+                  <div className="bg-zinc-950 p-2 border border-zinc-850 rounded-xl text-zinc-400 shrink-0">
+                    <Info className="w-4 h-4" />
+                  </div>
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-bold text-zinc-300 font-sans">How do we know this?</h4>
+                    <p className="text-xs text-zinc-450 leading-relaxed font-sans">
+                      Velour compares submitted identifiers against publicly reported breach disclosures, exposure datasets, and public broker records.
+                      We map historical indices transiently to help you verify matches without compromising your current privacy settings.
+                    </p>
                   </div>
                 </div>
 
-                {/* Account CTA */}
-                <div className="bg-zinc-900/50 border border-zinc-700/80 rounded-2xl p-8 sm:p-10 text-center space-y-6 relative overflow-hidden">
-                  <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-indigo-500/25 to-transparent" />
-                  <div className="space-y-2">
-                    <h3 className="text-2xl font-bold text-white">Your full report is ready</h3>
-                    <p className="text-zinc-400 text-sm max-w-md mx-auto leading-relaxed">
-                      Create a free account to access your complete exposure report, request data removals, and enable ongoing monitoring.
+                {/* 3. VISUALLY FIRST-CLASS DIY REMOVAL SECTION */}
+                <div className="space-y-5 border-t border-zinc-900 pt-8">
+                  <div className="space-y-1 text-left">
+                    <h3 className="text-base font-bold text-white flex items-center gap-2">
+                      <FileText className="w-4.5 h-4.5 text-zinc-400" />
+                      <span>Take Action Yourself (Self-Service Removal)</span>
+                    </h3>
+                    <p className="text-xs text-zinc-450">You are not powerless. You have the statutory right to request removal from these databases. Use these guides to opt-out manually.</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    {/* Column 1: Data Broker Opt-Out Links */}
+                    <div className="bg-zinc-900/30 border border-zinc-850 rounded-2xl p-5 space-y-4">
+                      <div className="flex items-center gap-2 border-b border-zinc-900 pb-2">
+                        <Globe className="w-4 h-4 text-zinc-400" />
+                        <h4 className="text-xs font-bold text-zinc-200">Data Broker Opt-Outs</h4>
+                      </div>
+                      <p className="text-[11px] text-zinc-450 leading-normal font-sans">
+                        Data brokers aggregate public listings. Requesting opt-out suppresses your details from public searches.
+                      </p>
+                      <div className="space-y-3 pt-1">
+                        {[
+                          { name: 'National Public Data', link: 'https://www.nationalpublicdata.com/optout.html', est: '5-7 business days' },
+                          { name: 'Whitepages Opt-Out', link: 'https://www.whitepages.com/privacy', est: '2-3 business days' },
+                          { name: 'LexisNexis Registry', link: 'https://optout.lexisnexis.com/', est: '3-5 business days' }
+                        ].map((item) => (
+                          <div key={item.name} className="p-3 bg-zinc-950/60 border border-zinc-900 rounded-xl space-y-2 text-left">
+                            <div className="flex justify-between items-center gap-2">
+                              <span className="text-[11px] font-bold text-zinc-300">{item.name}</span>
+                              <a
+                                href={item.link}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] font-semibold text-zinc-400 hover:text-white underline flex items-center gap-0.5"
+                              >
+                                opt out
+                              </a>
+                            </div>
+                            <span className="text-[9.5px] font-mono text-zinc-550 block">Est. Timeline: {item.est}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Column 2: Credit Freeze Resources */}
+                    <div className="bg-zinc-900/30 border border-zinc-850 rounded-2xl p-5 space-y-4">
+                      <div className="flex items-center gap-2 border-b border-zinc-900 pb-2">
+                        <LockKeyhole className="w-4 h-4 text-zinc-400" />
+                        <h4 className="text-xs font-bold text-zinc-200">Credit Freeze Bureaus</h4>
+                      </div>
+                      <p className="text-[11px] text-zinc-450 leading-normal font-sans">
+                        A credit freeze blocks financial institutions from pulling your credit, stopping identity theft accounts before they open.
+                      </p>
+                      <div className="space-y-3 pt-1">
+                        {[
+                          { name: 'Equifax Freeze Center', link: 'https://www.equifax.com/personal/credit-report-services/credit-freeze/' },
+                          { name: 'Experian Credit Freeze', link: 'https://www.experian.com/freeze/center.html' },
+                          { name: 'TransUnion Freeze', link: 'https://www.transunion.com/credit-freeze' }
+                        ].map((item) => (
+                          <div key={item.name} className="p-3 bg-zinc-950/60 border border-zinc-900 rounded-xl flex justify-between items-center gap-2 text-left">
+                            <span className="text-[11px] font-bold text-zinc-300">{item.name}</span>
+                            <a
+                              href={item.link}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-[10px] font-semibold text-zinc-400 hover:text-white underline flex items-center gap-0.5 shrink-0"
+                            >
+                              freeze file
+                            </a>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Column 3: Identity & Breach Guides */}
+                    <div className="bg-zinc-900/30 border border-zinc-850 rounded-2xl p-5 space-y-4">
+                      <div className="flex items-center gap-2 border-b border-zinc-900 pb-2">
+                        <Sparkles className="w-4 h-4 text-zinc-400" />
+                        <h4 className="text-xs font-bold text-zinc-200">Mitigation & Fraud Alerts</h4>
+                      </div>
+                      <p className="text-[11px] text-zinc-450 leading-normal font-sans">
+                        Follow official federal guidelines if your SSN or sensitive details appear in exposures.
+                      </p>
+                      <div className="space-y-3 pt-1">
+                        <div className="p-3 bg-zinc-950/60 border border-zinc-900 rounded-xl space-y-1.5 text-left">
+                          <span className="text-[11px] font-bold text-zinc-300 block">FTC Identity Theft Portal</span>
+                          <p className="text-[10px] text-zinc-500 font-sans leading-normal">File a formal report and obtain a recovery plan from the government.</p>
+                          <a
+                            href="https://www.identitytheft.gov/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[10px] font-semibold text-zinc-400 hover:text-white underline block pt-0.5"
+                          >
+                            report theft
+                          </a>
+                        </div>
+                        <div className="p-3 bg-zinc-950/60 border border-zinc-900 rounded-xl space-y-1 text-left">
+                          <span className="text-[11px] font-bold text-zinc-300 block">Change Credentials</span>
+                          <p className="text-[10px] text-zinc-500 font-sans leading-normal">Change passwords for exposed accounts and enable Multi-Factor Authentication.</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Educational Snip: Why do data brokers exist? */}
+                  <div className="p-4 bg-zinc-950/60 border border-zinc-900 rounded-xl grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                    <div className="space-y-1 text-left">
+                      <span className="font-semibold text-zinc-300 block font-sans">Why do Data Brokers exist?</span>
+                      <p className="text-zinc-500 leading-relaxed font-sans">
+                        Brokers crawl online profile links, voter registries, utility records, and real estate files, compiling dossiers for background search engines. Statutory laws like CCPA guarantee your option to suppress this indexing.
+                      </p>
+                    </div>
+                    <div className="space-y-1 text-left">
+                      <span className="font-semibold text-zinc-300 block font-sans">Why do removal timelines vary?</span>
+                      <p className="text-zinc-500 leading-relaxed font-sans">
+                        Brokers process removals using structured automated databases or manual compliance review audits. This makes suppressions take between 2 and 15 business days depending on their system architecture.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. PREMIUM OPTION - FRAMED AS CONVENIENCE & TIME-SAVING */}
+                <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-8 sm:p-10 text-center space-y-6 relative overflow-hidden">
+                  <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-zinc-800/80 to-transparent" />
+                  <div className="space-y-2 max-w-xl mx-auto">
+                    <h3 className="text-xl font-bold text-white">Prefer Guided Removal Assistance?</h3>
+                    <p className="text-zinc-400 text-xs leading-relaxed font-sans">
+                      For users who prefer guided assistance, Velour can coordinate formal opt-out and removal requests on your behalf.
+                      We manage provider follow-ups, submit standardized statutory suppression forms, coordinate supporting paperwork, and track ongoing removal responses so you don't have to spend hours filing them.
                     </p>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-w-md mx-auto text-left">
-                    {['View all breach details and dates', 'See exactly which data was exposed', 'Request removal from public records', 'Enable continuous exposure monitoring'].map((item) => (
-                      <div key={item} className="flex items-center gap-2 text-xs text-zinc-300">
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-                        <span>{item}</span>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5 max-w-2.5xl mx-auto text-left">
+                    {[
+                      { title: 'Administrative Assistance', desc: 'We compile, sign, and submit formal regulatory opt-out requests.' },
+                      { title: 'Active Response Tracking', desc: 'Our operations team monitors broker response logs for completion.' },
+                      { title: 'Continuous Exposure Auditing', desc: 'We regularly scan registries to verify your details don\'t reappear.' }
+                    ].map((item) => (
+                      <div key={item.title} className="p-4 bg-zinc-950/40 border border-zinc-900 rounded-xl space-y-1">
+                        <span className="text-[11px] font-bold text-zinc-200 block font-sans">{item.title}</span>
+                        <p className="text-[10px] text-zinc-400 leading-normal font-sans">{item.desc}</p>
                       </div>
                     ))}
                   </div>
+
                   <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
                     <button
                       id="create-account-post-discovery"
-                      onClick={() => { setShowAuthModal(true); setAuthForm('signup'); setAuthEmail(discoveryEmail); }}
-                      className="px-8 py-3 bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-sm rounded-xl transition-colors flex items-center gap-2"
+                      onClick={() => {
+                        setShowAuthModal(true);
+                        setAuthForm('signup');
+                        // Pre-populate sign-up input where appropriate
+                        if (discoveryType === 'email') setAuthEmail(discoveryEmail);
+                        else if (discoveryType === 'phone') setAuthPhone(discoveryPhone);
+                        else if (discoveryType === 'username') setAuthUsername(discoveryUsername);
+                      }}
+                      className="px-8 py-3 bg-white hover:bg-zinc-100 text-zinc-950 font-bold text-xs rounded-xl transition-colors flex items-center gap-2 shadow-sm"
                     >
-                      Create Free Account
-                      <ArrowRight className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setDiscoveryPhase('hero')}
-                      className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-                    >
-                      Scan a different email
+                      Coordinate Removals with Velour
+                      <ArrowRight className="w-4 h-4 text-zinc-950" />
                     </button>
                   </div>
-                  <p className="text-[11px] text-zinc-600">No credit card required · Cancel anytime · Your data stays private</p>
+                  <p className="text-[10px] text-zinc-650 font-sans mt-2">No payment information required to run checks · Transparency-first policy</p>
                 </div>
               </div>
             )}
           </div>
-
         ) : (
           /* PRIMARY AUTHENTICATED PLATFORM PORTAL UI */
           <div className="space-y-8 relative z-10 text-left">

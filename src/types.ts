@@ -99,5 +99,6 @@ export interface PrivacyRemovalRequest {
   createdAt: string;
   updatedAt: string;
   screenshotCaptured?: boolean;
+  verificationDocuments?: { docType: string; docName: string; uploadedAt: string }[];
 }
 
